@@ -53,26 +53,27 @@ def delete_prediction(index):
         df.to_csv(SAVED_FILE, index=False)
 
 # ----------------------------------------------------
-# DATA LOADING
+# DATA LOADING (patched)
 # ----------------------------------------------------
 @st.cache_data
 def load_df():
     path = DATA_DIR / "model_dataset.csv"
     if not path.exists():
-        st.error("❌ model_dataset.csv not found. Run pipeline first.")
+        st.error("❌ model_dataset.csv not found. Run dataset build workflow first.")
         st.stop()
-    df = pd.read_csv(path)
-    if df.empty:
-        st.error("❌ model_dataset.csv is empty.")
+    try:
+        df = pd.read_csv(path)
+        if df.empty:
+            st.error("⚠️ model_dataset.csv is empty. Re-run dataset build workflow.")
+            st.stop()
+    except Exception as e:
+        st.error(f"Error reading dataset: {e}")
         st.stop()
     return df
 
 df = load_df()
 
-FEATURES = [
-    "points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5", "minutes"
-]
-
+FEATURES = ["points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5", "minutes"]
 TARGETS = [
     "points", "rebounds", "assists", "threept_fg", "steals", "blocks",
     "points_assists", "points_rebounds", "rebounds_assists",
@@ -83,45 +84,42 @@ TARGETS = [
 # MODEL TRAINING + PREDICTION
 # ----------------------------------------------------
 def train_player_models(player_df):
-    """Train 3 models per stat (XGB, LGB, RF) for a single player."""
     results = {}
-    player_df = player_df.tail(20)  # last 20 games
-
+    player_df = player_df.tail(20)
     if len(player_df) < 10:
         return None
+    missing_features = [f for f in FEATURES if f not in player_df.columns]
+    if missing_features:
+        st.error(f"❌ Missing features in dataset: {missing_features}")
+        st.stop()
 
     X = player_df[FEATURES]
     latest = player_df.iloc[-1][FEATURES].values.reshape(1, -1)
-
     for target in TARGETS:
+        if target not in player_df.columns:
+            continue
         y = player_df[target]
         if y.nunique() < 2:
             continue
-
         # --- XGBoost ---
         model_xgb = xgb.XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
         model_xgb.fit(X, y)
         pred_xgb = model_xgb.predict(latest)[0]
-
         # --- LightGBM ---
         model_lgb = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
         model_lgb.fit(X, y)
         pred_lgb = model_lgb.predict(latest)[0]
-
         # --- Random Forest ---
         model_rf = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42)
         model_rf.fit(X, y)
         pred_rf = model_rf.predict(latest)[0]
-
         avg_pred = (pred_xgb + pred_lgb + pred_rf) / 3
-
         results[target] = {
             "XGBoost": round(pred_xgb, 2),
             "LightGBM": round(pred_lgb, 2),
             "RandomForest": round(pred_rf, 2),
             "Average": round(avg_pred, 2)
         }
-
     return results
 
 # ----------------------------------------------------
@@ -131,11 +129,9 @@ def display_predictions(player, results):
     if not results:
         st.warning("No predictions available for this player.")
         return
-
     st.subheader(f"📊 Projections for {player}")
     df_preds = pd.DataFrame(results).T
     st.dataframe(df_preds.style.format("{:.2f}"))
-
     save_col, fav_col = st.columns(2)
     if save_col.button(f"💾 Save Predictions for {player}"):
         for stat, vals in results.items():
@@ -158,16 +154,14 @@ def display_predictions(player, results):
 # MULTI-TAB STREAMLIT UI
 # ----------------------------------------------------
 st.title("🏀 Hot Shot Props AI Dashboard")
-
 tabs = st.tabs(["🏠 Home", "🔍 Player Search", "💾 Saved Predictions"])
 
 # ----------------------------------------------------
-# 🏠 HOME TAB - Favorites auto-train and display
+# 🏠 HOME TAB
 # ----------------------------------------------------
 with tabs[0]:
     st.header("⭐ Favorite Players")
     favorites = load_json(FAV_FILE)
-
     if not favorites:
         st.info("You have no favorite players yet. Add some in the 'Player Search' tab.")
     else:
@@ -179,7 +173,7 @@ with tabs[0]:
             st.markdown("---")
 
 # ----------------------------------------------------
-# 🔍 PLAYER SEARCH TAB - On-demand projections
+# 🔍 PLAYER SEARCH TAB
 # ----------------------------------------------------
 with tabs[1]:
     st.header("🔍 Search Player")
@@ -190,24 +184,22 @@ with tabs[1]:
         index=0,
         key="player_select"
     )
-
     if player == "Select Player From Dropdown":
         st.info("👆 Please choose a player to view projections.")
+        st.stop()
+    pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
+    if len(pdf) < 10:
+        st.warning("Not enough games to train a model for this player.")
     else:
-        pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
-        if len(pdf) < 10:
-            st.warning("Not enough games to train a model for this player.")
-        else:
-            st.info(f"Training models for {player} (last 20 games)...")
-            results = train_player_models(pdf)
-            display_predictions(player, results)
+        st.info(f"Training models for {player} (last 20 games)...")
+        results = train_player_models(pdf)
+        display_predictions(player, results)
 
 # ----------------------------------------------------
-# 💾 SAVED PREDICTIONS TAB - View and delete saved outputs
+# 💾 SAVED PREDICTIONS TAB
 # ----------------------------------------------------
 with tabs[2]:
     st.header("💾 Saved Predictions")
-
     df_saved = load_saved_predictions()
     if df_saved.empty:
         st.info("No saved predictions yet.")
@@ -223,10 +215,10 @@ with tabs[2]:
         if st.button("🗑 Delete Selected Prediction"):
             delete_prediction(int(delete_index))
             st.success("Deleted prediction successfully.")
-            st.experimental_rerun()
+            st.rerun()
 
 # ----------------------------------------------------
-# FOOTER + STATUS SECTION
+# SIDEBAR
 # ----------------------------------------------------
 with st.sidebar:
     st.markdown("### 📅 Data Info")
@@ -236,11 +228,10 @@ with st.sidebar:
         st.caption(f"Last dataset update: {mod_time.strftime('%Y-%m-%d %H:%M:%S')}")
     else:
         st.caption("Dataset not found.")
-
     favs = load_json(FAV_FILE)
     st.markdown("---")
-    st.caption(f"⭐ You have {len(favs)} favorite players saved.")
-    st.caption(f"💾 {len(load_saved_predictions())} saved predictions available.")
+    st.caption(f"⭐ {len(favs)} favorite players saved.")
+    st.caption(f"💾 {len(load_saved_predictions())} saved predictions.")
 
 st.markdown("---")
 st.markdown(
