@@ -18,22 +18,31 @@ def fetch_game_logs(season=2025, pages=200):
             print(f"❌ Failed on page {page}")
             break
 
-        data = r.json()
-        rows = data.get("data", [])
-        if not rows:
+        data = r.json().get("data", [])
+        if not data:
             break
 
-        for s in rows:
-            mins = s.get("min", "0")
-            mins = int(mins.split(":")[0]) if isinstance(mins, str) and ":" in mins else int(mins or 0)
+        for s in data:
+            mins_str = s.get("min", "0")
+            try:
+                mins = int(mins_str.split(":")[0]) if ":" in mins_str else int(mins_str)
+            except:
+                mins = 0
+
             all_rows.append({
                 "GAME_DATE": s["game"]["date"][:10],
                 "player_name": f"{s['player']['first_name']} {s['player']['last_name']}",
                 "points": s.get("pts", 0),
                 "rebounds": s.get("reb", 0),
                 "assists": s.get("ast", 0),
-                "minutes": mins,
+                "threept_fg": s.get("fg3m", 0),
+                "steals": s.get("stl", 0),
+                "blocks": s.get("blk", 0),
+                "minutes": mins
             })
+
+        if page % 25 == 0:
+            print(f"Fetched {page * 100} rows...")
 
     df = pd.DataFrame(all_rows)
     os.makedirs("data", exist_ok=True)
