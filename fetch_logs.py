@@ -11,7 +11,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RAW_LOGS_FILE = DATA_DIR / "raw_logs.csv"
 
 # Hardcode your Ball Don't Lie API key here:
-API_KEY = "YOUR_API_KEY_HERE"  # 🔒 Replace with your real key
+API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # 🔒 Replace with your real key
 
 if not API_KEY:
     raise ValueError("❌ Missing BALL_DONT_LIE_API_KEY — please set it in the code.")
