@@ -1,208 +1,190 @@
 import streamlit as st
 import pandas as pd
-import requests
+import numpy as np
+import plotly.express as px
 import os
-import joblib
+import json
 from pathlib import Path
-from io import BytesIO
-from PIL import Image
-import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+import lightgbm as lgb
+import requests
+from datetime import datetime
 
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
-st.set_page_config(page_title="🏀 Hot Shot Props AI", layout="wide")
+st.set_page_config(page_title="Hot Shot Props AI Dashboard", layout="wide")
 
-DATA_DIR = Path("data")
+DATA_PATH = Path("data/model_dataset.csv")
 MODELS_DIR = Path("models")
-IMAGES_DIR = DATA_DIR / "images"
-for d in [DATA_DIR, MODELS_DIR, IMAGES_DIR]:
-    d.mkdir(exist_ok=True)
+IMAGES_DIR = Path("data/player_images")
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_URL = "https://api.balldontlie.io/v1"
+BALL_API = "https://api.balldontlie.io/v1"
 API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"
 HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 
 # -------------------------------------------------
-# IMAGE CACHING
+# LOAD DATA
 # -------------------------------------------------
-@st.cache_data(show_spinner=False)
-def get_player_image(player_id, name):
-    image_path = IMAGES_DIR / f"{player_id}.jpg"
-    if image_path.exists():
-        return str(image_path)
+@st.cache_data
+def load_data():
+    if not DATA_PATH.exists():
+        st.error("Dataset not found. Please run the dataset build workflow first.")
+        st.stop()
+    df = pd.read_csv(DATA_PATH)
+    df = df.dropna(subset=["player_name"])
+    return df
 
-    # Fetch image dynamically (NBA CDN)
+df = load_data()
+players = sorted(df["player_name"].unique())
+
+# -------------------------------------------------
+# HELPER FUNCTIONS
+# -------------------------------------------------
+def get_player_image(player_name):
+    safe_name = player_name.replace(" ", "_").lower()
+    img_path = IMAGES_DIR / f"{safe_name}.jpg"
+    if img_path.exists():
+        return str(img_path)
     try:
-        url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
-        r = requests.get(url)
-        if r.status_code == 200:
-            with open(image_path, "wb") as f:
-                f.write(r.content)
-            return str(image_path)
-    except Exception:
-        pass
+        resp = requests.get(f"{BALL_API}/players?search={player_name.split()[0]}", headers=HEADERS, timeout=5)
+        data = resp.json()
+        if "data" in data and len(data["data"]) > 0:
+            # use NBA headshot pattern if available
+            player_id = data["data"][0]["id"]
+            url = f"https://cdn.nba.com/headshots/nba/latest/260x190/{player_id}.png"
+            img = requests.get(url)
+            if img.status_code == 200:
+                with open(img_path, "wb") as f:
+                    f.write(img.content)
+                return str(img_path)
+    except Exception as e:
+        st.warning(f"Image load failed: {e}")
     return None
 
-# -------------------------------------------------
-# DATA FETCH
-# -------------------------------------------------
-@st.cache_data(ttl=3600)
-def fetch_player_data(player_name):
-    params = {"search": player_name}
-    r = requests.get(f"{BASE_URL}/players", headers=HEADERS, params=params)
-    if r.status_code != 200:
-        return None
-    data = r.json().get("data", [])
-    return data[0] if data else None
-
-@st.cache_data(ttl=3600)
-def fetch_player_stats(player_id, num_games=20):
-    r = requests.get(f"{BASE_URL}/stats", headers=HEADERS, params={"player_ids[]": player_id, "per_page": num_games})
-    if r.status_code != 200:
-        return None
-    return pd.DataFrame(r.json().get("data", []))
-
-# -------------------------------------------------
-# MODEL LOADING
-# -------------------------------------------------
-def load_model(stat):
-    try:
-        return joblib.load(MODELS_DIR / f"{stat}_model.pkl")
-    except:
-        return None
-
-# -------------------------------------------------
-# PREDICTIONS
-# -------------------------------------------------
-def generate_predictions(player_name, df):
-    predictions = {}
-    feature_cols = ["points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5"]
-
-    for stat in ["points", "rebounds", "assists"]:
-        model = load_model(stat)
-        if model is None:
-            predictions[stat] = "⚠️ Model not found"
+@st.cache_resource
+def train_models(player_name, df):
+    player_df = df[df["player_name"] == player_name].copy()
+    features = [
+        "points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5",
+        "points_assists", "points_rebounds", "rebounds_assists", "points_rebounds_assists"
+    ]
+    targets = ["points", "assists", "rebounds", "minutes", "steals", "blocks"]
+    models = {}
+    for target in targets:
+        X = player_df[features].fillna(0)
+        y = player_df[target].fillna(0)
+        if len(y) < 5:
             continue
-        try:
-            latest = df[df["player_name"] == player_name].tail(1)[feature_cols]
-            predictions[stat] = round(model.predict(latest)[0], 1)
-        except Exception as e:
-            predictions[stat] = f"Error: {e}"
+        rf = RandomForestRegressor(n_estimators=100)
+        xgb = XGBRegressor(n_estimators=100, eval_metric="rmse")
+        lgbm = lgb.LGBMRegressor(n_estimators=100)
+        rf.fit(X, y)
+        xgb.fit(X, y)
+        lgbm.fit(X, y)
+        models[target] = {"rf": rf, "xgb": xgb, "lgb": lgbm}
+    return models
 
-    # Derived props
-    if all(isinstance(predictions.get(s), (int, float)) for s in ["points", "rebounds", "assists"]):
-        predictions["PA"] = predictions["points"] + predictions["assists"]
-        predictions["PR"] = predictions["points"] + predictions["rebounds"]
-        predictions["RA"] = predictions["rebounds"] + predictions["assists"]
-        predictions["PRA"] = predictions["points"] + predictions["rebounds"] + predictions["assists"]
+def predict_player(player_name, df):
+    player_df = df[df["player_name"] == player_name]
+    if player_df.empty:
+        return None
+    latest = player_df.tail(1)
+    models = train_models(player_name, df)
+    preds = {}
+    for stat, model_set in models.items():
+        vals = [
+            model_set["rf"].predict(latest)[0],
+            model_set["xgb"].predict(latest)[0],
+            model_set["lgb"].predict(latest)[0],
+        ]
+        preds[stat] = np.mean(vals)
+    return preds
+
+# -------------------------------------------------
+# UI
+# -------------------------------------------------
+st.markdown("""
+<style>
+body { background-color: #0E1117; color: white; }
+[data-testid="stMetricValue"] { color: #00ffcc; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+tabs = st.tabs(["🏠 Home / Favorites", "🧪 Prop Projection Lab", "📊 Projection Tracker", "🔬 Prop Research Lab"])
+
+# ---------------- HOME ----------------
+with tabs[0]:
+    st.header("🏠 Favorites")
+    favs_path = Path("data/favorites.json")
+    if not favs_path.exists():
+        favs_path.write_text(json.dumps([]))
+    favorites = json.loads(favs_path.read_text())
+
+    if favorites:
+        for p in favorites:
+            st.markdown(f"### ⭐ {p}")
     else:
-        predictions["PA"] = predictions["PR"] = predictions["RA"] = predictions["PRA"] = "—"
+        st.info("No favorite players yet — add one from the Projection Lab.")
 
-    return predictions
+# ---------------- PROP PROJECTION LAB ----------------
+with tabs[1]:
+    st.header("🧪 Prop Projection Lab")
+    player = st.selectbox("Select Player", ["Select Player From Dropdown"] + players)
 
-# -------------------------------------------------
-# UI: SIDEBAR NAVIGATION
-# -------------------------------------------------
-st.sidebar.title("🏀 Hot Shot Props AI")
-page = st.sidebar.radio("Navigate", ["🏠 Home", "📊 Generate Projections", "⭐ Favorites", "📈 Prediction Tracker", "📚 Research"])
+    if player != "Select Player From Dropdown":
+        st.write(f"### {player}")
+        img = get_player_image(player)
+        if img:
+            st.image(img, width=180)
 
-# -------------------------------------------------
-# HOME PAGE
-# -------------------------------------------------
-if page == "🏠 Home":
-    st.title("🏀 Hot Shot Props AI - Player Projection Dashboard")
-    st.markdown("Welcome! Use the sidebar to generate AI-driven stat predictions, track favorites, or research player performance.")
-    st.image("https://cdn.nba.com/logos/nba/nba-logoman-75.svg", width=150)
+        preds = predict_player(player, df)
+        if preds:
+            st.subheader("📈 Projected Stats (Model Avg)")
+            cols = st.columns(5)
+            for i, (k, v) in enumerate(preds.items()):
+                cols[i % 5].metric(label=k.capitalize(), value=round(v, 1))
 
-# -------------------------------------------------
-# GENERATE PROJECTIONS
-# -------------------------------------------------
-elif page == "📊 Generate Projections":
-    st.title("📊 Generate Player Projections")
-    df = pd.read_csv(DATA_DIR / "model_dataset.csv")
-
-    players = sorted(df["player_name"].unique())
-    player_name = st.selectbox("Select Player", players)
-
-    if player_name:
-        player_data = fetch_player_data(player_name)
-        if player_data:
-            pid = player_data["id"]
-            image_path = get_player_image(pid, player_name)
-            team = player_data["team"]["full_name"]
-
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                if image_path:
-                    st.image(image_path, width=180)
-            with col2:
-                st.subheader(f"{player_name} - {team}")
-
-            preds = generate_predictions(player_name, df)
-            st.metric("Points", preds.get("points"))
-            st.metric("Rebounds", preds.get("rebounds"))
-            st.metric("Assists", preds.get("assists"))
-            st.metric("PRA", preds.get("PRA"))
-
-# -------------------------------------------------
-# FAVORITES PAGE
-# -------------------------------------------------
-elif page == "⭐ Favorites":
-    st.title("⭐ Saved Favorites")
-    fav_file = DATA_DIR / "favorites.csv"
-
-    if fav_file.exists():
-        favs = pd.read_csv(fav_file)
-        st.dataframe(favs)
-    else:
-        st.info("No favorites yet. Add one from the Projections page!")
-
-# -------------------------------------------------
-# PREDICTION TRACKER
-# -------------------------------------------------
-elif page == "📈 Prediction Tracker":
-    st.title("📈 Prediction Tracker")
-    tracker_file = DATA_DIR / "tracker.csv"
-
-    if tracker_file.exists():
-        tracker = pd.read_csv(tracker_file)
-        st.dataframe(tracker)
-    else:
-        st.info("No tracked predictions yet.")
-
-# -------------------------------------------------
-# RESEARCH TAB
-# -------------------------------------------------
-elif page == "📚 Research":
-    st.title("📚 Player Research Center")
-
-    name = st.text_input("Search player name")
-    if name:
-        p_data = fetch_player_data(name)
-        if not p_data:
-            st.warning("No player found.")
+            # save favorite
+            if st.button("⭐ Add to Favorites"):
+                if player not in favorites:
+                    favorites.append(player)
+                    favs_path.write_text(json.dumps(favorites))
+                    st.success(f"{player} added to favorites!")
         else:
-            pid = p_data["id"]
-            img = get_player_image(pid, name)
-            team = p_data["team"]["full_name"]
+            st.warning("No predictions available.")
 
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                if img:
-                    st.image(img, width=180)
-            with col2:
-                st.subheader(f"{name} - {team}")
+# ---------------- TRACKER ----------------
+with tabs[2]:
+    st.header("📊 Prediction Tracker")
+    tracker_path = Path("data/tracker.json")
+    if not tracker_path.exists():
+        tracker_path.write_text(json.dumps([]))
+    tracker = json.loads(tracker_path.read_text())
 
-            stats_df = fetch_player_stats(pid, 100)
-            if stats_df is not None and not stats_df.empty:
-                st.success("📊 Player stats loaded successfully!")
+    if tracker:
+        st.dataframe(pd.DataFrame(tracker))
+        if st.button("🗑 Clear Tracker"):
+            tracker_path.write_text(json.dumps([]))
+            st.experimental_rerun()
+    else:
+        st.info("No saved predictions yet.")
 
-                # Expanders
-                for label, n in [("Last 5 Games", 5), ("Last 10 Games", 10), ("Last 20 Games", 20)]:
-                    with st.expander(label):
-                        recent = stats_df.tail(n)
-                        for col in ["pts", "reb", "ast"]:
-                            st.bar_chart(recent[col])
-            else:
-                st.warning("No stats available.")
+# ---------------- RESEARCH ----------------
+with tabs[3]:
+    st.header("🔬 Prop Research Lab")
+    player = st.selectbox("Select Player for Research", ["Select Player From Dropdown"] + players, key="research")
+
+    if player != "Select Player From Dropdown":
+        st.subheader(player)
+        img = get_player_image(player)
+        if img:
+            st.image(img, width=180)
+
+        player_df = df[df["player_name"] == player]
+        exp = st.expander("📊 Last 10 Games")
+        with exp:
+            fig = px.bar(player_df.tail(10), x="GAME_DATE", y="points", title="Points - Last 10 Games")
+            st.plotly_chart(fig, use_container_width=True)
