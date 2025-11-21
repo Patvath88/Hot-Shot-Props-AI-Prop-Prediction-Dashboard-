@@ -1,56 +1,75 @@
 import pandas as pd
-import xgboost as xgb
-import lightgbm as lgb
-from sklearn.ensemble import RandomForestRegressor
-from pathlib import Path
+import numpy as np
 import joblib
+from pathlib import Path
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
 
-DATA_DIR = Path("data")
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
+DATA_FILE = Path("data/model_dataset.csv")
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(exist_ok=True)
-DATA_FILE = DATA_DIR / "model_dataset.csv"
 
-def train_stat_model(stat):
-    print(f"🤖 Training {stat} model...")
+# -------------------------------------------------
+# LOAD DATA
+# -------------------------------------------------
+print("📊 Loading dataset...")
+if not DATA_FILE.exists():
+    raise FileNotFoundError("❌ Dataset not found! Run build_dataset.py first.")
 
-    df = pd.read_csv(DATA_FILE)
-    features = ["points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5", "minutes"]
-    df = df.dropna(subset=features + [stat])
+df = pd.read_csv(DATA_FILE)
 
-    X = df[features]
-    y = df[stat]
+# Check required columns
+required_cols = {"player_name", "GAME_DATE", "points", "rebounds", "assists"}
+if not required_cols.issubset(df.columns):
+    raise ValueError(f"❌ Missing required columns: {required_cols - set(df.columns)}")
 
-    if len(X) < 20:
-        print(f"⚠️ Not enough data to train {stat} model.")
-        return
+# Drop any rows with missing numeric data
+df = df.dropna(subset=["points", "rebounds", "assists"])
 
-    # XGBoost
-    xgb_model = xgb.XGBRegressor(n_estimators=300, learning_rate=0.05, max_depth=5)
-    xgb_model.fit(X, y)
-    xgb_model.save_model(MODELS_DIR / f"{stat}_xgb.json")
+# Encode player names numerically (for model input)
+df["player_encoded"] = df["player_name"].astype("category").cat.codes
 
-    # LightGBM
-    lgb_model = lgb.LGBMRegressor(n_estimators=300, learning_rate=0.05, max_depth=5)
-    lgb_model.fit(X, y)
-    joblib.dump(lgb_model, MODELS_DIR / f"{stat}_lgb.pkl")
+# -------------------------------------------------
+# FEATURES AND TARGETS
+# -------------------------------------------------
+feature_cols = ["player_encoded", "points_rolling5", "rebounds_rolling5", "assists_rolling5"]
+for col in feature_cols:
+    if col not in df.columns:
+        df[col] = 0  # fallback in case of missing rolling averages
 
-    # Random Forest
-    rf_model = RandomForestRegressor(n_estimators=300, max_depth=8, random_state=42)
-    rf_model.fit(X, y)
-    joblib.dump(rf_model, MODELS_DIR / f"{stat}_rf.pkl")
+X = df[feature_cols]
+y_points = df["points"]
+y_rebounds = df["rebounds"]
+y_assists = df["assists"]
 
-    print(f"✅ Saved models for {stat}")
+# -------------------------------------------------
+# TRAIN FUNCTION
+# -------------------------------------------------
+def train_and_save_model(X, y, model_name):
+    """Train and save a RandomForest model."""
+    print(f"🤖 Training {model_name} model...")
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestRegressor(n_estimators=200, random_state=42)
+    model.fit(X_train, y_train)
+    
+    preds = model.predict(X_test)
+    mae = mean_absolute_error(y_test, preds)
+    print(f"✅ {model_name} model trained | MAE: {mae:.2f}")
 
-def main():
-    stats = [
-        "points", "rebounds", "assists", "threept_fg", "steals", "blocks",
-        "points_assists", "points_rebounds", "rebounds_assists", "points_rebounds_assists", "minutes"
-    ]
-    for s in stats:
-        try:
-            train_stat_model(s)
-        except Exception as e:
-            print(f"⚠️ Error training {s}: {e}")
+    out_path = MODELS_DIR / f"{model_name}_model.pkl"
+    joblib.dump(model, out_path)
+    print(f"💾 Saved {model_name} model → {out_path}")
 
-if __name__ == "__main__":
-    main()
+# -------------------------------------------------
+# TRAIN MODELS
+# -------------------------------------------------
+train_and_save_model(X, y_points, "points")
+train_and_save_model(X, y_rebounds, "rebounds")
+train_and_save_model(X, y_assists, "assists")
+
+print("🎯 All models trained and saved successfully!")
