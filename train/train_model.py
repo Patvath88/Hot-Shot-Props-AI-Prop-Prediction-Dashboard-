@@ -1,30 +1,37 @@
-import pandas as pd
 import xgboost as xgb
+import pandas as pd
 import os
 
-FEATURES = [
-    "points_rolling5",
-    "reb_rolling5",
-    "ast_rolling5",
-    "min_rolling5",
-    "minutes"
-]
+def train_all():
+    df = pd.read_csv("data/model_dataset.csv").dropna()
 
-
-def train_stat(df, target, outname):
-    X = df[FEATURES]
-    y = df[target]
-
-    model = xgb.XGBRegressor(
-        n_estimators=350,
-        max_depth=5,
-        learning_rate=0.07,
-        subsample=0.8,
-        colsample_bytree=0.8
-    )
-    model.fit(X, y)
+    features = [
+        "points_rolling5",
+        "reb_rolling5",
+        "ast_rolling5",
+        "min_rolling5",
+        "minutes"
+    ]
 
     os.makedirs("models", exist_ok=True)
-    model.save_model(f"models/{outname}.json")
-    print(f"Saved model → models/{outname}.json")
-    return model
+
+    targets = {
+        "points": "points",
+        "rebounds": "rebounds",
+        "assists": "assists"
+    }
+
+    for name, target in targets.items():
+        model = xgb.XGBRegressor(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=4,
+            subsample=0.8,
+            colsample_bytree=0.8
+        )
+        model.fit(df[features], df[target])
+        model.save_model(f"models/{name}.json")
+        print(f"✅ Trained {name}")
+
+if __name__ == "__main__":
+    train_all()
