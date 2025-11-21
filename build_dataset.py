@@ -11,16 +11,17 @@ def build_dataset():
     df = pd.read_csv(RAW_PATH)
     df = df.sort_values(["player_name", "GAME_DATE"])
 
-    # rolling averages
+    # Compute rolling averages (5-game)
     for col in ["points", "rebounds", "assists", "threept_fg", "steals", "blocks", "minutes"]:
-        df[f"{col}_rolling5"] = (
+        roll_col = f"{col}_rolling5"
+        df[roll_col] = (
             df.groupby("player_name")[col]
-              .rolling(5, min_periods=1)
+              .rolling(window=5, min_periods=1)
               .mean()
               .reset_index(level=0, drop=True)
         )
 
-    # derived combo stats
+    # Derived combined stats
     df["points_assists"] = df["points"] + df["assists"]
     df["points_rebounds"] = df["points"] + df["rebounds"]
     df["rebounds_assists"] = df["rebounds"] + df["assists"]
