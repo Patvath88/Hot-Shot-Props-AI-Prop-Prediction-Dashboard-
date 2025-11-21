@@ -38,7 +38,7 @@ def train_player_model(player_name):
         st.warning("⚠️ Not enough data to train a model for this player.")
         return None
 
-    features = ["points_rolling5", "rebounds_rolling5", "assists_rolling5"]
+    features = ["points_rolling5", "reb_rolling5", "ast_rolling5"]
     for f in features:
         if f not in player_data.columns:
             player_data[f] = 0
@@ -88,7 +88,7 @@ if player_name:
     models = get_or_train_model(player_name)
 
     if models:
-        features = ["points_rolling5", "rebounds_rolling5", "assists_rolling5"]
+        features = ["points_rolling5", "reb_rolling5", "ast_rolling5"]
         latest_data = df[df["player_name"] == player_name].tail(1)[features]
         for stat, model in models.items():
             pred = model.predict(latest_data)[0]
