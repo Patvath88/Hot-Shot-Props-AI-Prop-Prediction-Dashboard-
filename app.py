@@ -7,15 +7,33 @@ from datetime import datetime
 from pathlib import Path
 import json
 import os
+import time
 
 # ----------------------------------------------------
-# CONFIG
+# CONFIG & DIAGNOSTIC LOADER
 # ----------------------------------------------------
 st.set_page_config(page_title="🏀 NBA AI Prop Predictor", layout="wide")
 DATA_DIR = Path("data")
 FAV_FILE = DATA_DIR / "favorites.json"
 SAVED_FILE = DATA_DIR / "saved_predictions.csv"
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# Diagnostics
+start_time = time.time()
+st.sidebar.info("🔍 Checking data and model files...")
+
+if not (DATA_DIR / "model_dataset.csv").exists():
+    st.error("❌ model_dataset.csv missing. Run pipeline first.")
+    st.stop()
+
+try:
+    df_diag = pd.read_csv(DATA_DIR / "model_dataset.csv")
+    st.sidebar.success(f"✅ Loaded dataset ({len(df_diag)} rows, {len(df_diag.columns)} cols)")
+except Exception as e:
+    st.error(f"⚠️ Error loading dataset: {e}")
+    st.stop()
+
+st.sidebar.write(f"⏱ Load time: {time.time() - start_time:.2f}s")
 
 # ----------------------------------------------------
 # HELPERS
@@ -53,27 +71,21 @@ def delete_prediction(index):
         df.to_csv(SAVED_FILE, index=False)
 
 # ----------------------------------------------------
-# DATA LOADING (patched)
+# DATA LOADING
 # ----------------------------------------------------
 @st.cache_data
 def load_df():
     path = DATA_DIR / "model_dataset.csv"
-    if not path.exists():
-        st.error("❌ model_dataset.csv not found. Run dataset build workflow first.")
-        st.stop()
-    try:
-        df = pd.read_csv(path)
-        if df.empty:
-            st.error("⚠️ model_dataset.csv is empty. Re-run dataset build workflow.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Error reading dataset: {e}")
+    df = pd.read_csv(path)
+    if df.empty:
+        st.error("❌ model_dataset.csv is empty.")
         st.stop()
     return df
 
 df = load_df()
 
 FEATURES = ["points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5", "minutes"]
+
 TARGETS = [
     "points", "rebounds", "assists", "threept_fg", "steals", "blocks",
     "points_assists", "points_rebounds", "rebounds_assists",
@@ -88,28 +100,18 @@ def train_player_models(player_df):
     player_df = player_df.tail(20)
     if len(player_df) < 10:
         return None
-    missing_features = [f for f in FEATURES if f not in player_df.columns]
-    if missing_features:
-        st.error(f"❌ Missing features in dataset: {missing_features}")
-        st.stop()
-
     X = player_df[FEATURES]
     latest = player_df.iloc[-1][FEATURES].values.reshape(1, -1)
     for target in TARGETS:
-        if target not in player_df.columns:
-            continue
         y = player_df[target]
         if y.nunique() < 2:
             continue
-        # --- XGBoost ---
         model_xgb = xgb.XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
         model_xgb.fit(X, y)
         pred_xgb = model_xgb.predict(latest)[0]
-        # --- LightGBM ---
         model_lgb = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
         model_lgb.fit(X, y)
         pred_lgb = model_lgb.predict(latest)[0]
-        # --- Random Forest ---
         model_rf = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42)
         model_rf.fit(X, y)
         pred_rf = model_rf.predict(latest)[0]
@@ -137,7 +139,6 @@ def display_predictions(player, results):
         for stat, vals in results.items():
             save_prediction(player, stat, vals["Average"])
         st.success(f"✅ Predictions for {player} saved!")
-
     favorites = load_json(FAV_FILE)
     if player in favorites:
         if fav_col.button("💔 Remove from Favorites"):
@@ -151,19 +152,16 @@ def display_predictions(player, results):
             st.success(f"Added {player} to favorites!")
 
 # ----------------------------------------------------
-# MULTI-TAB STREAMLIT UI
+# MULTI-TAB UI
 # ----------------------------------------------------
 st.title("🏀 Hot Shot Props AI Dashboard")
 tabs = st.tabs(["🏠 Home", "🔍 Player Search", "💾 Saved Predictions"])
 
-# ----------------------------------------------------
-# 🏠 HOME TAB
-# ----------------------------------------------------
 with tabs[0]:
     st.header("⭐ Favorite Players")
     favorites = load_json(FAV_FILE)
     if not favorites:
-        st.info("You have no favorite players yet. Add some in the 'Player Search' tab.")
+        st.info("You have no favorite players yet. Add some in 'Player Search'.")
     else:
         for fav_player in favorites:
             st.subheader(f"📈 {fav_player}")
@@ -172,32 +170,19 @@ with tabs[0]:
             display_predictions(fav_player, results)
             st.markdown("---")
 
-# ----------------------------------------------------
-# 🔍 PLAYER SEARCH TAB
-# ----------------------------------------------------
 with tabs[1]:
     st.header("🔍 Search Player")
     players = sorted(df["player_name"].unique())
-    player = st.selectbox(
-        "Select a Player",
-        ["Select Player From Dropdown"] + players,
-        index=0,
-        key="player_select"
-    )
-    if player == "Select Player From Dropdown":
-        st.info("👆 Please choose a player to view projections.")
-        st.stop()
-    pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
-    if len(pdf) < 10:
-        st.warning("Not enough games to train a model for this player.")
-    else:
-        st.info(f"Training models for {player} (last 20 games)...")
-        results = train_player_models(pdf)
-        display_predictions(player, results)
+    player = st.selectbox("Select a Player", ["Select Player From Dropdown"] + players, key="player_select")
+    if player != "Select Player From Dropdown":
+        pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
+        if len(pdf) < 10:
+            st.warning("Not enough games to train a model for this player.")
+        else:
+            st.info(f"Training models for {player} (last 20 games)...")
+            results = train_player_models(pdf)
+            display_predictions(player, results)
 
-# ----------------------------------------------------
-# 💾 SAVED PREDICTIONS TAB
-# ----------------------------------------------------
 with tabs[2]:
     st.header("💾 Saved Predictions")
     df_saved = load_saved_predictions()
@@ -205,21 +190,13 @@ with tabs[2]:
         st.info("No saved predictions yet.")
     else:
         st.dataframe(df_saved)
-        delete_index = st.number_input(
-            "Enter row index to delete",
-            min_value=0,
-            max_value=len(df_saved) - 1,
-            step=1,
-            key="del_idx"
-        )
+        delete_index = st.number_input("Enter row index to delete", min_value=0,
+                                       max_value=len(df_saved) - 1, step=1, key="del_idx")
         if st.button("🗑 Delete Selected Prediction"):
             delete_prediction(int(delete_index))
             st.success("Deleted prediction successfully.")
-            st.rerun()
+            st.experimental_rerun()
 
-# ----------------------------------------------------
-# SIDEBAR
-# ----------------------------------------------------
 with st.sidebar:
     st.markdown("### 📅 Data Info")
     model_dataset_path = DATA_DIR / "model_dataset.csv"
@@ -230,13 +207,5 @@ with st.sidebar:
         st.caption("Dataset not found.")
     favs = load_json(FAV_FILE)
     st.markdown("---")
-    st.caption(f"⭐ {len(favs)} favorite players saved.")
+    st.caption(f"⭐ {len(favs)} favorites saved.")
     st.caption(f"💾 {len(load_saved_predictions())} saved predictions.")
-
-st.markdown("---")
-st.markdown(
-    "<center>🏀 <b>Hot Shot Props AI</b> — Built with XGBoost, LightGBM, and Random Forest<br>"
-    "Player-specific projections trained on-demand and stored locally.<br>"
-    "© 2025 PulsR Analytics</center>",
-    unsafe_allow_html=True
-)
