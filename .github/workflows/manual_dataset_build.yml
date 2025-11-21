@@ -1,16 +1,17 @@
 name: Manual Dataset Build
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Enables the 'Run workflow' button manually
 
 permissions:
-  contents: write
+  contents: write  # Needed for committing and pushing new CSVs
 
 jobs:
   build-dataset:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -35,5 +36,5 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add data/model_dataset.csv
-          git commit -m "🤖 Auto-generated model_dataset.csv" || echo "No changes"
+          git commit -m "🤖 Auto-generated model_dataset.csv" || echo "No changes to commit"
           git push || echo "No changes to push"
