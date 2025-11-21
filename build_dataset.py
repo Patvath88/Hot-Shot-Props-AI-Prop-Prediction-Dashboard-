@@ -1,51 +1,89 @@
-
 import pandas as pd
-import numpy as np
 from pathlib import Path
 
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
 DATA_DIR = Path("data")
-RAW_FILE = DATA_DIR / "raw_logs.csv"
-OUTPUT_FILE = DATA_DIR / "model_dataset.csv"
+RAW_LOGS_FILE = DATA_DIR / "raw_logs.csv"
+MODEL_DATASET_FILE = DATA_DIR / "model_dataset.csv"
 
+# -------------------------------------------------
+# MAIN DATASET BUILDER
+# -------------------------------------------------
 def build_dataset():
-    if not RAW_FILE.exists():
+    print("📊 Loading raw logs...")
+    if not RAW_LOGS_FILE.exists():
         print("❌ No raw_logs.csv found — run fetch_logs.py first.")
         return
 
-    print("📊 Loading raw logs...")
-    df = pd.read_csv(RAW_FILE)
+    df = pd.read_csv(RAW_LOGS_FILE)
+    print(f"✅ Loaded {len(df)} rows from raw logs")
 
-    # Clean up and ensure correct columns
-    essential_cols = ["player_name", "TEAM", "OPP", "GAME_DATE", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M"]
-    df = df[[col for col in essential_cols if col in df.columns]].copy()
+    # Ensure consistent column naming
+    df.columns = [c.strip().lower() for c in df.columns]
 
-    df.rename(columns={
-        "PTS": "points",
-        "REB": "rebounds",
-        "AST": "assists",
-        "STL": "steals",
-        "BLK": "blocks",
-        "FG3M": "threept_fg",
-        "MIN": "minutes"
-    }, inplace=True)
+    # Rename to match expected format if needed
+    rename_map = {
+        "pts": "points",
+        "reb": "rebounds",
+        "ast": "assists",
+        "fg3m": "threept_fg",
+    }
+    df.rename(columns=rename_map, inplace=True)
 
-    # Sort and calculate rolling stats
-    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
-    df.sort_values(["player_name", "GAME_DATE"], inplace=True)
+    # Ensure all expected stat columns exist
+    required_cols = [
+        "game_date", "player_name", "points", "rebounds", "assists",
+        "threept_fg", "steals", "blocks", "minutes"
+    ]
 
+    for col in required_cols:
+        if col not in df.columns:
+            print(f"⚠️ Missing column '{col}' — filling with 0s")
+            df[col] = 0
+
+    # Convert numeric columns safely
+    numeric_cols = [
+        "points", "rebounds", "assists", "threept_fg",
+        "steals", "blocks", "minutes"
+    ]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Sort by player and game date
+    df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce")
+    df = df.sort_values(["player_name", "game_date"])
+
+    # Rolling averages for last 5 games
+    print("🔁 Calculating rolling averages...")
     for stat in ["points", "rebounds", "assists", "minutes"]:
-        df[f"{stat}_rolling5"] = df.groupby("player_name")[stat].transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+        df[f"{stat}_rolling5"] = (
+            df.groupby("player_name")[stat]
+            .transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+        )
 
-    # Derived combination features
+    # Combined stats
+    print("🧮 Computing combined features...")
     df["points_assists"] = df["points"] + df["assists"]
     df["points_rebounds"] = df["points"] + df["rebounds"]
     df["rebounds_assists"] = df["rebounds"] + df["assists"]
     df["points_rebounds_assists"] = df["points"] + df["rebounds"] + df["assists"]
 
-    print("✅ Built enriched dataset with rolling averages.")
+    # Drop any duplicates or invalid rows
+    df.drop_duplicates(subset=["player_name", "game_date"], inplace=True)
+    df = df.dropna(subset=["player_name", "game_date"])
 
-    df.to_csv(OUTPUT_FILE, index=False)
-    print(f"💾 Saved enriched dataset to {OUTPUT_FILE}")
+    # Save dataset
+    df.to_csv(MODEL_DATASET_FILE, index=False)
+    print(f"✅ Dataset built successfully and saved to {MODEL_DATASET_FILE}")
+    print(f"📊 Final shape: {df.shape}")
 
+    # Display sample output
+    print(df.head())
+
+# -------------------------------------------------
+# RUN SCRIPT
+# -------------------------------------------------
 if __name__ == "__main__":
     build_dataset()
