@@ -7,9 +7,8 @@ from pathlib import Path
 # -----------------------------------------
 # CONFIG
 # -----------------------------------------
-API_KEY = os.getenv("BALL_DONT_LIE_API_KEY")
-if not API_KEY:
-    raise ValueError("❌ Missing BALL_DONT_LIE_API_KEY environment variable.")
+# Hardcoded API key (replace with your actual key)
+API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
