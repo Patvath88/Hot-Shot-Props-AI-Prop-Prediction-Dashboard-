@@ -1,7 +1,4 @@
 streamlit
 pandas
-numpy
-requests
 xgboost
-scikit-learn
-python-dotenv
+requests
