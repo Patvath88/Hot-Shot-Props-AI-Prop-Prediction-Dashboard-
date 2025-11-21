@@ -2,145 +2,238 @@ import streamlit as st
 import pandas as pd
 import xgboost as xgb
 import lightgbm as lgb
-import joblib
-import os
-import subprocess
-import sys
+from sklearn.ensemble import RandomForestRegressor
+from datetime import datetime
 from pathlib import Path
+import json
+import os
 
-# -------------------------------
-# Streamlit Configuration
-# -------------------------------
-st.set_page_config(page_title="NBA Multi-Model Projections", layout="wide")
-
+# ----------------------------------------------------
+# CONFIG
+# ----------------------------------------------------
+st.set_page_config(page_title="🏀 NBA AI Prop Predictor", layout="wide")
 DATA_DIR = Path("data")
-MODEL_DIR = Path("models")
+FAV_FILE = DATA_DIR / "favorites.json"
+SAVED_FILE = DATA_DIR / "saved_predictions.csv"
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# -------------------------------
-# Caching Utilities
-# -------------------------------
+# ----------------------------------------------------
+# HELPERS
+# ----------------------------------------------------
+def load_json(file_path):
+    if file_path.exists():
+        with open(file_path, "r") as f:
+            return json.load(f)
+    return []
+
+def save_json(file_path, data):
+    with open(file_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_saved_predictions():
+    if SAVED_FILE.exists():
+        return pd.read_csv(SAVED_FILE)
+    return pd.DataFrame(columns=["timestamp", "player_name", "stat", "prediction"])
+
+def save_prediction(player_name, stat, prediction):
+    df = load_saved_predictions()
+    new_row = pd.DataFrame([{
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "player_name": player_name,
+        "stat": stat,
+        "prediction": round(prediction, 2)
+    }])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(SAVED_FILE, index=False)
+
+def delete_prediction(index):
+    df = load_saved_predictions()
+    if 0 <= index < len(df):
+        df = df.drop(index)
+        df.to_csv(SAVED_FILE, index=False)
+
+# ----------------------------------------------------
+# DATA LOADING
+# ----------------------------------------------------
 @st.cache_data
 def load_df():
-    return pd.read_csv(DATA_DIR / "model_dataset.csv")
+    path = DATA_DIR / "model_dataset.csv"
+    if not path.exists():
+        st.error("❌ model_dataset.csv not found. Run pipeline first.")
+        st.stop()
+    df = pd.read_csv(path)
+    if df.empty:
+        st.error("❌ model_dataset.csv is empty.")
+        st.stop()
+    return df
 
-@st.cache_resource
-def load_xgb_model(target):
-    model = xgb.XGBRegressor()
-    model.load_model(MODEL_DIR / f"{target}_xgb.json")
-    return model
-
-@st.cache_resource
-def load_lgb_model(target):
-    return joblib.load(MODEL_DIR / f"{target}_lgb.pkl")
-
-@st.cache_resource
-def load_rf_model(target):
-    return joblib.load(MODEL_DIR / f"{target}_rf.pkl")
-
-# -------------------------------
-# Pipeline Rerun Utility
-# -------------------------------
-def run_full_pipeline():
-    commands = [
-        ("Fetching raw game logs...", [sys.executable, "fetch_logs.py"]),
-        ("Building dataset...", [sys.executable, "build_dataset.py"]),
-        ("Training models...", [sys.executable, "train_model.py"]),
-    ]
-    for desc, cmd in commands:
-        st.info(f"🌀 {desc}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            st.error(f"❌ Error during {desc}\n\n{result.stderr}")
-            st.stop()
-        else:
-            st.success(f"✅ {desc} complete.")
-            st.code(result.stdout[-800:], language="text")
-
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    st.success("✅ Pipeline finished successfully.")
-    st.rerun()
-
-# -------------------------------
-# Sidebar Controls
-# -------------------------------
-st.sidebar.header("⚙️ Admin Controls")
-
-if st.sidebar.button("🚀 Run Full Pipeline"):
-    with st.spinner("Running full pipeline... please wait..."):
-        run_full_pipeline()
-
-# -------------------------------
-# Check prerequisites
-# -------------------------------
-if not (DATA_DIR / "model_dataset.csv").exists() or not any(MODEL_DIR.glob("*.json")):
-    st.warning("⚠️ Models or data missing. Run the full pipeline first.")
-    st.stop()
-
-# -------------------------------
-# Load Data + Models
-# -------------------------------
 df = load_df()
 
+FEATURES = [
+    "points_rolling5", "reb_rolling5", "ast_rolling5", "min_rolling5", "minutes"
+]
+
 TARGETS = [
-    "points", "rebounds", "assists",
-    "threept_fg", "steals", "blocks",
+    "points", "rebounds", "assists", "threept_fg", "steals", "blocks",
     "points_assists", "points_rebounds", "rebounds_assists",
     "points_rebounds_assists", "minutes"
 ]
+# ----------------------------------------------------
+# MODEL TRAINING + PREDICTION
+# ----------------------------------------------------
+def train_player_models(player_df):
+    """Train 3 models per stat (XGB, LGB, RF) for a single player."""
+    results = {}
+    player_df = player_df.tail(20)  # last 20 games
 
-xgb_models = {t: load_xgb_model(t) for t in TARGETS}
-lgb_models = {t: load_lgb_model(t) for t in TARGETS}
-rf_models = {t: load_rf_model(t) for t in TARGETS}
+    if len(player_df) < 10:
+        return None
 
-# -------------------------------
-# Dashboard
-# -------------------------------
-st.title("🏀 NBA Multi-Model Player Projections Dashboard")
+    X = player_df[FEATURES]
+    latest = player_df.iloc[-1][FEATURES].values.reshape(1, -1)
 
-players = sorted(df["player_name"].unique())
-player = st.selectbox("Select Player", players)
+    for target in TARGETS:
+        y = player_df[target]
+        if y.nunique() < 2:
+            continue
 
-pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
-latest = pdf.iloc[-1]
+        # --- XGBoost ---
+        model_xgb = xgb.XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
+        model_xgb.fit(X, y)
+        pred_xgb = model_xgb.predict(latest)[0]
 
-FEATURES = [
-    "points_rolling5", "rebounds_rolling5", "assists_rolling5",
-    "threept_fg_rolling5", "steals_rolling5", "blocks_rolling5", "minutes_rolling5",
-    "points_var5", "rebounds_var5", "assists_var5",
-    "threept_fg_var5", "steals_var5", "blocks_var5", "minutes_var5",
-    "rest_days",
-    "season_points_avg", "season_reb_avg", "season_ast_avg", "season_min_avg"
-]
-X = latest[FEATURES].values.reshape(1, -1)
+        # --- LightGBM ---
+        model_lgb = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
+        model_lgb.fit(X, y)
+        pred_lgb = model_lgb.predict(latest)[0]
 
-# -------------------------------
-# Predictions Table
-# -------------------------------
-st.subheader(f"📊 {player} — Projected Stats")
+        # --- Random Forest ---
+        model_rf = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42)
+        model_rf.fit(X, y)
+        pred_rf = model_rf.predict(latest)[0]
 
-table_data = []
-for stat in TARGETS:
-    xgb_pred = xgb_models[stat].predict(X)[0]
-    lgb_pred = lgb_models[stat].predict(X)[0]
-    rf_pred = rf_models[stat].predict(X)[0]
-    avg_pred = (xgb_pred + lgb_pred + rf_pred) / 3
-    table_data.append({
-        "Stat": stat.replace("_", " ").title(),
-        "XGBoost": round(xgb_pred, 2),
-        "LightGBM": round(lgb_pred, 2),
-        "RandomForest": round(rf_pred, 2),
-        "Ensemble Avg": round(avg_pred, 2)
-    })
+        avg_pred = (pred_xgb + pred_lgb + pred_rf) / 3
 
-table_df = pd.DataFrame(table_data)
-st.dataframe(table_df, use_container_width=True)
+        results[target] = {
+            "XGBoost": round(pred_xgb, 2),
+            "LightGBM": round(pred_lgb, 2),
+            "RandomForest": round(pred_rf, 2),
+            "Average": round(avg_pred, 2)
+        }
 
-# -------------------------------
-# Recent Trend Chart
-# -------------------------------
-st.subheader("📈 Recent Performance (Last 10 Games)")
-chart_cols = ["points", "rebounds", "assists", "threept_fg", "steals", "blocks"]
-st.line_chart(pdf.tail(10).set_index("GAME_DATE")[chart_cols])
+    return results
 
-st.caption("🤖 All models auto-refresh daily at 7 AM EST | Built with XGBoost, LightGBM & RandomForest")
+
+# ----------------------------------------------------
+# DISPLAY PREDICTIONS
+# ----------------------------------------------------
+def display_predictions(player, results):
+    if not results:
+        st.warning("No predictions available for this player.")
+        return
+
+    st.subheader(f"📊 Projections for {player}")
+    df_preds = pd.DataFrame(results).T
+    st.dataframe(df_preds.style.format("{:.2f}"))
+
+    save_col, fav_col = st.columns(2)
+    if save_col.button(f"💾 Save Predictions for {player}"):
+        for stat, vals in results.items():
+            save_prediction(player, stat, vals["Average"])
+        st.success(f"✅ Predictions for {player} saved!")
+
+    favorites = load_json(FAV_FILE)
+    if player in favorites:
+        if fav_col.button("💔 Remove from Favorites"):
+            favorites.remove(player)
+            save_json(FAV_FILE, favorites)
+            st.info(f"Removed {player} from favorites.")
+    else:
+        if fav_col.button("⭐ Add to Favorites"):
+            favorites.append(player)
+            save_json(FAV_FILE, favorites)
+            st.success(f"Added {player} to favorites!")
+# ----------------------------------------------------
+# MULTI-TAB STREAMLIT UI
+# ----------------------------------------------------
+st.title("🏀 Hot Shot Props AI Dashboard")
+
+tabs = st.tabs(["🏠 Home", "🔍 Player Search", "💾 Saved Predictions"])
+
+# ----------------------------------------------------
+# 🏠 HOME TAB - Favorites auto-train and display
+# ----------------------------------------------------
+with tabs[0]:
+    st.header("⭐ Favorite Players")
+    favorites = load_json(FAV_FILE)
+
+    if not favorites:
+        st.info("You have no favorite players yet. Add some in the 'Player Search' tab.")
+    else:
+        for fav_player in favorites:
+            st.subheader(f"📈 {fav_player}")
+            pdf = df[df["player_name"] == fav_player].sort_values("GAME_DATE")
+            results = train_player_models(pdf)
+            display_predictions(fav_player, results)
+            st.markdown("---")
+
+# ----------------------------------------------------
+# 🔍 PLAYER SEARCH TAB - On-demand projections
+# ----------------------------------------------------
+with tabs[1]:
+    st.header("🔍 Search Player")
+    players = sorted(df["player_name"].unique())
+    player = st.selectbox("Select a Player", players, key="player_select")
+
+    if player:
+        pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
+        if len(pdf) < 10:
+            st.warning("Not enough games to train a model for this player.")
+        else:
+            st.info(f"Training models for {player} (last 20 games)...")
+            results = train_player_models(pdf)
+            display_predictions(player, results)
+
+# ----------------------------------------------------
+# 💾 SAVED PREDICTIONS TAB - View and delete saved outputs
+# ----------------------------------------------------
+with tabs[2]:
+    st.header("💾 Saved Predictions")
+
+    df_saved = load_saved_predictions()
+    if df_saved.empty:
+        st.info("No saved predictions yet.")
+    else:
+        st.dataframe(df_saved)
+        delete_index = st.number_input(
+            "Enter row index to delete", min_value=0,
+            max_value=len(df_saved) - 1, step=1, key="del_idx"
+        )
+        if st.button("🗑 Delete Selected Prediction"):
+            delete_prediction(int(delete_index))
+            st.success("Deleted prediction successfully.")
+            st.experimental_rerun()
+# ----------------------------------------------------
+# FOOTER + STATUS SECTION
+# ----------------------------------------------------
+with st.sidebar:
+    st.markdown("### 📅 Data Info")
+    model_dataset_path = DATA_DIR / "model_dataset.csv"
+    if model_dataset_path.exists():
+        mod_time = datetime.fromtimestamp(model_dataset_path.stat().st_mtime)
+        st.caption(f"Last dataset update: {mod_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        st.caption("Dataset not found.")
+
+    favs = load_json(FAV_FILE)
+    st.markdown("---")
+    st.caption(f"⭐ You have {len(favs)} favorite players saved.")
+    st.caption(f"💾 {len(load_saved_predictions())} saved predictions available.")
+
+st.markdown("---")
+st.markdown(
+    "<center>🏀 <b>Hot Shot Props AI</b> — Built with XGBoost, LightGBM, and Random Forest<br>"
+    "Player-specific projections trained on-demand and stored locally.<br>"
+    "© 2025 PulsR Analytics</center>",
+    unsafe_allow_html=True
+)
