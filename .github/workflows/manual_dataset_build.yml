@@ -2,25 +2,16 @@ name: Manual Dataset Build
 
 on:
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Why are you rebuilding the dataset?"
-        required: false
-        default: "Manual refresh"
 
 permissions:
   contents: write
 
 jobs:
-  build_dataset:
-    name: Build and Inspect Dataset
+  build-dataset:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,31 +26,14 @@ jobs:
       - name: Fetch and build dataset
         run: |
           echo "🏀 Fetching fresh NBA data..."
-          python fetch_logs.py || echo "⚠️ Fetch logs failed"
+          python fetch_logs.py
           echo "📊 Building dataset..."
-          python build_dataset.py || echo "⚠️ Build dataset failed"
-
-      - name: Inspect dataset
-        run: |
-          echo "🧐 Checking generated dataset..."
-          if [ -f data/model_dataset.csv ]; then
-            head -n 5 data/model_dataset.csv
-            echo ""
-            echo "✅ Columns found:"
-            python - <<'PYCODE'
-import pandas as pd
-df = pd.read_csv("data/model_dataset.csv")
-print(list(df.columns))
-print(f"\nTotal rows: {len(df)}")
-PYCODE
-          else
-            echo "❌ data/model_dataset.csv not found"
-          fi
+          python build_dataset.py
 
       - name: Commit dataset
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          git add data/model_dataset.csv || echo "No dataset file"
-          git commit -m "🤖 Auto-generated model_dataset.csv" || echo "No changes to commit"
+          git add data/model_dataset.csv
+          git commit -m "🤖 Auto-generated model_dataset.csv" || echo "No changes"
           git push || echo "No changes to push"
