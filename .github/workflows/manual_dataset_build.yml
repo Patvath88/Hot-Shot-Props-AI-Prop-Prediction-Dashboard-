@@ -44,6 +44,7 @@ jobs:
               df = pd.read_csv("data/model_dataset.csv")
               print(list(df.columns))
               print(f"\nTotal rows: {len(df)}")
+              
             PYCODE
           else
             echo "❌ model_dataset.csv not found"
