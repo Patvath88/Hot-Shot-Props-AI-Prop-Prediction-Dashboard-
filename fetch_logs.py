@@ -37,11 +37,13 @@ def fetch_active_players():
         resp = requests.get(f"{BASE_URL}/players/active", params=params, headers=HEADERS)
         if resp.status_code != 200:
             print(f"⚠️ Failed fetching active players: {resp.status_code}")
+            print(resp.text)
             break
 
         data = resp.json()
         players.extend(data.get("data", []))
 
+        # ✅ Correct pagination key for Ball Don't Lie API v2
         cursor = data.get("meta", {}).get("next_cursor")
         if not cursor:
             break
@@ -65,6 +67,7 @@ def fetch_player_game_logs(player_id, season=2025):
         resp = requests.get(f"{BASE_URL}/stats", params=params, headers=HEADERS)
         if resp.status_code != 200:
             print(f"⚠️ Error fetching stats for player {player_id}")
+            print(resp.text)
             break
 
         data = resp.json()
