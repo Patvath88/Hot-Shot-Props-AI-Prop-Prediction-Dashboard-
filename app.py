@@ -9,7 +9,6 @@ from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 import lightgbm as lgb
 import requests
-from datetime import datetime
 
 # -------------------------------------------------
 # CONFIG
@@ -52,7 +51,6 @@ def get_player_image(player_name):
         resp = requests.get(f"{BALL_API}/players?search={player_name.split()[0]}", headers=HEADERS, timeout=5)
         data = resp.json()
         if "data" in data and len(data["data"]) > 0:
-            # use NBA headshot pattern if available
             player_id = data["data"][0]["id"]
             url = f"https://cdn.nba.com/headshots/nba/latest/260x190/{player_id}.png"
             img = requests.get(url)
@@ -91,16 +89,27 @@ def predict_player(player_name, df):
     player_df = df[df["player_name"] == player_name]
     if player_df.empty:
         return None
+
     latest = player_df.tail(1)
     models = train_models(player_name, df)
     preds = {}
+
     for stat, model_set in models.items():
-        vals = [
-            model_set["rf"].predict(latest)[0],
-            model_set["xgb"].predict(latest)[0],
-            model_set["lgb"].predict(latest)[0],
-        ]
-        preds[stat] = np.mean(vals)
+        stat_preds = []
+        for model_name, model in model_set.items():
+            feature_names = getattr(model, "feature_names_in_", None)
+            if feature_names is not None:
+                latest_features = latest.reindex(columns=feature_names, fill_value=0)
+            else:
+                latest_features = latest
+            try:
+                pred_val = model.predict(latest_features)[0]
+                stat_preds.append(pred_val)
+            except Exception as e:
+                st.warning(f"Prediction failed for {player_name} - {stat}: {e}")
+        if stat_preds:
+            preds[stat] = np.nanmean(stat_preds)
+
     return preds
 
 # -------------------------------------------------
@@ -147,7 +156,6 @@ with tabs[1]:
             for i, (k, v) in enumerate(preds.items()):
                 cols[i % 5].metric(label=k.capitalize(), value=round(v, 1))
 
-            # save favorite
             if st.button("⭐ Add to Favorites"):
                 if player not in favorites:
                     favorites.append(player)
