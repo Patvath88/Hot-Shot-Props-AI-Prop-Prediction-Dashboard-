@@ -17,8 +17,8 @@ st.set_page_config(page_title="Hot Shot Props AI Dashboard", layout="wide")
 
 DATA_PATH = Path("data/model_dataset.csv")
 MODELS_DIR = Path("models")
-IMAGES_DIR = Path("data/player_images")
-IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+MEDIA_DIR = Path("data/media")
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 BALL_API = "https://api.balldontlie.io/v1"
 API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"
@@ -40,28 +40,41 @@ df = load_data()
 players = sorted(df["player_name"].unique())
 
 # -------------------------------------------------
-# HELPER FUNCTIONS
+# IMAGE + LOGO HELPERS
 # -------------------------------------------------
-def get_player_image(player_name):
+def get_player_media(player_name, team_name=None):
+    """Fetch and cache player headshot or team logo."""
     safe_name = player_name.replace(" ", "_").lower()
-    img_path = IMAGES_DIR / f"{safe_name}.jpg"
+    img_path = MEDIA_DIR / f"{safe_name}.png"
+
+    # return cached version if exists
     if img_path.exists():
         return str(img_path)
+
     try:
-        resp = requests.get(f"{BALL_API}/players?search={player_name.split()[0]}", headers=HEADERS, timeout=5)
+        # Search by full name for more accurate matching
+        resp = requests.get(f"{BALL_API}/players?search={player_name}", headers=HEADERS, timeout=6)
         data = resp.json()
         if "data" in data and len(data["data"]) > 0:
             player_id = data["data"][0]["id"]
             url = f"https://cdn.nba.com/headshots/nba/latest/260x190/{player_id}.png"
-            img = requests.get(url)
+            img = requests.get(url, timeout=6)
             if img.status_code == 200:
                 with open(img_path, "wb") as f:
                     f.write(img.content)
                 return str(img_path)
+
+        # fallback team logo
+        if team_name:
+            logo_url = f"https://cdn.nba.com/logos/nba/{hash(team_name) % 50}.svg"
+            return logo_url
     except Exception as e:
-        st.warning(f"Image load failed: {e}")
+        st.warning(f"⚠️ Media load failed: {e}")
     return None
 
+# -------------------------------------------------
+# MODEL TRAINING
+# -------------------------------------------------
 @st.cache_resource
 def train_models(player_name, df):
     player_df = df[df["player_name"] == player_name].copy()
@@ -76,15 +89,18 @@ def train_models(player_name, df):
         y = player_df[target].fillna(0)
         if len(y) < 5:
             continue
-        rf = RandomForestRegressor(n_estimators=100)
-        xgb = XGBRegressor(n_estimators=100, eval_metric="rmse")
-        lgbm = lgb.LGBMRegressor(n_estimators=100)
+        rf = RandomForestRegressor(n_estimators=150)
+        xgb = XGBRegressor(n_estimators=150, eval_metric="rmse")
+        lgbm = lgb.LGBMRegressor(n_estimators=150)
         rf.fit(X, y)
         xgb.fit(X, y)
         lgbm.fit(X, y)
         models[target] = {"rf": rf, "xgb": xgb, "lgb": lgbm}
     return models
 
+# -------------------------------------------------
+# PREDICTION FUNCTION
+# -------------------------------------------------
 def predict_player(player_name, df):
     player_df = df[df["player_name"] == player_name]
     if player_df.empty:
@@ -105,20 +121,29 @@ def predict_player(player_name, df):
             try:
                 pred_val = model.predict(latest_features)[0]
                 stat_preds.append(pred_val)
-            except Exception as e:
-                st.warning(f"Prediction failed for {player_name} - {stat}: {e}")
+            except Exception:
+                pass
         if stat_preds:
             preds[stat] = np.nanmean(stat_preds)
+
+    # Combo stats
+    if all(k in preds for k in ["points", "assists", "rebounds"]):
+        preds["pa"] = preds["points"] + preds["assists"]
+        preds["pr"] = preds["points"] + preds["rebounds"]
+        preds["ra"] = preds["rebounds"] + preds["assists"]
+        preds["pra"] = preds["points"] + preds["rebounds"] + preds["assists"]
+    if "turnovers" in player_df.columns:
+        preds["tov"] = player_df["turnovers"].tail(5).mean()
 
     return preds
 
 # -------------------------------------------------
-# UI
+# UI CONFIG
 # -------------------------------------------------
 st.markdown("""
 <style>
 body { background-color: #0E1117; color: white; }
-[data-testid="stMetricValue"] { color: #00ffcc; font-weight: bold; }
+[data-testid="stMetricValue"] { color: #00ffcc; font-weight: bold; font-size: 22px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -136,7 +161,7 @@ with tabs[0]:
         for p in favorites:
             st.markdown(f"### ⭐ {p}")
     else:
-        st.info("No favorite players yet — add one from the Projection Lab.")
+        st.info("No favorites yet. Add one in the Projection Lab.")
 
 # ---------------- PROP PROJECTION LAB ----------------
 with tabs[1]:
@@ -145,16 +170,19 @@ with tabs[1]:
 
     if player != "Select Player From Dropdown":
         st.write(f"### {player}")
-        img = get_player_image(player)
+        team = df[df["player_name"] == player]["team"].iloc[-1] if "team" in df.columns else None
+        img = get_player_media(player, team)
         if img:
             st.image(img, width=180)
 
         preds = predict_player(player, df)
         if preds:
             st.subheader("📈 Projected Stats (Model Avg)")
+            keys = ["points", "assists", "rebounds", "minutes", "steals", "blocks", "pa", "pr", "ra", "pra", "tov"]
             cols = st.columns(5)
-            for i, (k, v) in enumerate(preds.items()):
-                cols[i % 5].metric(label=k.capitalize(), value=round(v, 1))
+            for i, k in enumerate(keys):
+                if k in preds:
+                    cols[i % 5].metric(label=k.upper(), value=round(preds[k], 1))
 
             if st.button("⭐ Add to Favorites"):
                 if player not in favorites:
@@ -162,7 +190,7 @@ with tabs[1]:
                     favs_path.write_text(json.dumps(favorites))
                     st.success(f"{player} added to favorites!")
         else:
-            st.warning("No predictions available.")
+            st.warning("No predictions available for this player.")
 
 # ---------------- TRACKER ----------------
 with tabs[2]:
@@ -187,12 +215,14 @@ with tabs[3]:
 
     if player != "Select Player From Dropdown":
         st.subheader(player)
-        img = get_player_image(player)
+        img = get_player_media(player)
         if img:
             st.image(img, width=180)
 
         player_df = df[df["player_name"] == player]
-        exp = st.expander("📊 Last 10 Games")
-        with exp:
-            fig = px.bar(player_df.tail(10), x="GAME_DATE", y="points", title="Points - Last 10 Games")
-            st.plotly_chart(fig, use_container_width=True)
+
+        for label, num in [("Last 5 Games", 5), ("Last 10 Games", 10), ("Last 20 Games", 20)]:
+            exp = st.expander(f"📊 {label}")
+            with exp:
+                fig = px.bar(player_df.tail(num), x="GAME_DATE", y="points", title=f"Points - {label}")
+                st.plotly_chart(fig, use_container_width=True)
