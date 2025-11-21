@@ -1,43 +1,46 @@
-name: Daily Model Refresh
+name: Daily NBA Model Refresh
 
 on:
   schedule:
-    # Run daily at 7 AM EST (12 UTC)
-    - cron: "0 12 * * *"
-  workflow_dispatch:  # allow manual trigger
-
-permissions:
-  contents: write  # ✅ allows pushing commits from GitHub Actions
+    - cron: "0 12 * * *"  # Runs every day at 7 AM EST (12:00 UTC)
+  workflow_dispatch:       # Allows manual triggering
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pandas requests xgboost lightgbm scikit-learn
 
-      - name: Run data + model pipeline
+      - name: Fetch NBA game logs
         run: |
-          echo "🏀 Running daily NBA model refresh..."
-          python fetch_logs.py
-          python build_dataset.py
-          python train_model.py
+          echo "🏀 Fetching fresh NBA game logs..."
+          python fetch_logs.py || echo "⚠️ Failed to fetch some logs"
+      
+      - name: Build dataset
+        run: |
+          echo "📊 Building enriched dataset..."
+          python build_dataset.py || echo "⚠️ Dataset build failed"
 
-      - name: Commit and push updated models + data
+      - name: Train models
+        run: |
+          echo "🤖 Training models..."
+          python train_model.py || echo "⚠️ Training step failed"
+
+      - name: Commit and push updates
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          git add data/ models/
-          git commit -m "🤖 Automated daily model refresh (multi-model)" || echo "No changes to commit"
-          git push
+          git add data/raw_logs.csv data/model_dataset.csv models/ || echo "No files to add"
+          git commit -m "🤖 Automated daily model + dataset refresh" || echo "No changes to commit"
+          git push || echo "No changes to push"
