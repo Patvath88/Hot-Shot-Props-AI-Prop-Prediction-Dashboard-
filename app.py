@@ -78,6 +78,7 @@ TARGETS = [
     "points_assists", "points_rebounds", "rebounds_assists",
     "points_rebounds_assists", "minutes"
 ]
+
 # ----------------------------------------------------
 # MODEL TRAINING + PREDICTION
 # ----------------------------------------------------
@@ -123,7 +124,6 @@ def train_player_models(player_df):
 
     return results
 
-
 # ----------------------------------------------------
 # DISPLAY PREDICTIONS
 # ----------------------------------------------------
@@ -153,6 +153,7 @@ def display_predictions(player, results):
             favorites.append(player)
             save_json(FAV_FILE, favorites)
             st.success(f"Added {player} to favorites!")
+
 # ----------------------------------------------------
 # MULTI-TAB STREAMLIT UI
 # ----------------------------------------------------
@@ -183,9 +184,16 @@ with tabs[0]:
 with tabs[1]:
     st.header("🔍 Search Player")
     players = sorted(df["player_name"].unique())
-    player = st.selectbox("Select a Player", players, key="player_select")
+    player = st.selectbox(
+        "Select a Player",
+        ["Select Player From Dropdown"] + players,
+        index=0,
+        key="player_select"
+    )
 
-    if player:
+    if player == "Select Player From Dropdown":
+        st.info("👆 Please choose a player to view projections.")
+    else:
         pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
         if len(pdf) < 10:
             st.warning("Not enough games to train a model for this player.")
@@ -206,13 +214,17 @@ with tabs[2]:
     else:
         st.dataframe(df_saved)
         delete_index = st.number_input(
-            "Enter row index to delete", min_value=0,
-            max_value=len(df_saved) - 1, step=1, key="del_idx"
+            "Enter row index to delete",
+            min_value=0,
+            max_value=len(df_saved) - 1,
+            step=1,
+            key="del_idx"
         )
         if st.button("🗑 Delete Selected Prediction"):
             delete_prediction(int(delete_index))
             st.success("Deleted prediction successfully.")
             st.experimental_rerun()
+
 # ----------------------------------------------------
 # FOOTER + STATUS SECTION
 # ----------------------------------------------------
