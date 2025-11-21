@@ -10,8 +10,8 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 RAW_LOGS_FILE = DATA_DIR / "raw_logs.csv"
 
-# Hardcoded Ball Don't Lie API key
-API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # Replace with your real key
+# 🔒 Your Ball Don't Lie API key (hardcoded for GitHub Actions)
+API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # Replace if needed
 
 if not API_KEY:
     raise ValueError("❌ Missing BALL_DONT_LIE_API_KEY — please set it in the code.")
@@ -24,79 +24,69 @@ BASE_URL = "https://api.balldontlie.io/v1"
 # FETCH FUNCTIONS
 # -------------------------------------------------
 def fetch_active_players():
-    """Fetch list of all active NBA players (handles new and old pagination)."""
+    """Fetch list of all active NBA players (cursor-based pagination)."""
+    print("🏀 Fetching all active players...")
     players = []
-    page = 1
     cursor = None
 
     while True:
         params = {"per_page": 100}
         if cursor:
             params["cursor"] = cursor
-        else:
-            params["page"] = page
 
-        resp = requests.get(f"{BASE_URL}/players", params=params, headers=HEADERS)
+        resp = requests.get(f"{BASE_URL}/players/active", params=params, headers=HEADERS)
         if resp.status_code != 200:
-            print(f"⚠️ Failed fetching players page {page}: {resp.text}")
+            print(f"⚠️ Failed fetching active players: {resp.status_code}")
             break
 
         data = resp.json()
         players.extend(data.get("data", []))
 
-        # ✅ Handle both pagination formats gracefully
-        meta = data.get("meta", {})
-        cursor = meta.get("next_cursor")
-
-        if not cursor and not meta.get("next_page"):
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
             break
 
-        page += 1
-        time.sleep(0.5)
+        time.sleep(0.4)
 
+    print(f"✅ Retrieved {len(players)} active players")
     return pd.DataFrame(players)
 
 
 def fetch_player_game_logs(player_id, season=2025):
-    """Fetch game logs for a given player."""
+    """Fetch game logs for a given player (cursor-based pagination)."""
     logs = []
-    page = 1
     cursor = None
 
     while True:
         params = {"player_ids[]": player_id, "seasons[]": season, "per_page": 100}
         if cursor:
             params["cursor"] = cursor
-        else:
-            params["page"] = page
 
         resp = requests.get(f"{BASE_URL}/stats", params=params, headers=HEADERS)
         if resp.status_code != 200:
-            print(f"⚠️ Error fetching stats for player {player_id} page {page}")
+            print(f"⚠️ Error fetching stats for player {player_id}")
             break
 
         data = resp.json()
         logs.extend(data.get("data", []))
 
-        meta = data.get("meta", {})
-        cursor = meta.get("next_cursor")
-
-        if not cursor and not meta.get("next_page"):
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
             break
 
-        page += 1
-        time.sleep(0.5)
+        time.sleep(0.4)
 
     return logs
 
 
 # -------------------------------------------------
-# MAIN PIPELINE
+# MAIN FETCH PIPELINE
 # -------------------------------------------------
 def main():
-    print("🏀 Fetching all active players...")
     players_df = fetch_active_players()
-    print(f"✅ Found {len(players_df)} active players")
+    if players_df.empty:
+        print("⚠️ No active players found.")
+        return
 
     all_logs = []
 
@@ -104,11 +94,12 @@ def main():
         pid = row["id"]
         name = f"{row['first_name']} {row['last_name']}"
         print(f"⛓ Fetching logs for {name} (ID {pid})")
+
         logs = fetch_player_game_logs(pid)
         for g in logs:
             game = g.get("game", {})
             stats = {
-                "GAME_DATE": game.get("date", "").split("T")[0] if game.get("date") else "",
+                "GAME_DATE": game.get("date", "").split("T")[0] if "date" in game else "",
                 "player_name": name,
                 "points": g.get("pts", 0),
                 "rebounds": g.get("reb", 0),
@@ -119,7 +110,8 @@ def main():
                 "minutes": int(g["min"].split(":")[0]) if g.get("min") else 0,
             }
             all_logs.append(stats)
-        time.sleep(0.5)
+
+        time.sleep(0.4)
 
     if not all_logs:
         print("⚠️ No logs fetched!")
