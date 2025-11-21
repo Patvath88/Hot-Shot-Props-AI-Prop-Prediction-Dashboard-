@@ -2,16 +2,25 @@ name: Manual Dataset Build
 
 on:
   workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you rebuilding the dataset?"
+        required: false
+        default: "Manual refresh"
 
 permissions:
   contents: write
 
 jobs:
-  build-dataset:
+  build_dataset:
+    name: Build and Inspect Dataset
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
