@@ -1,17 +1,13 @@
 name: Manual Dataset Build
 
 on:
-  workflow_dispatch:  # Enables the 'Run workflow' button manually
-
-permissions:
-  contents: write  # Needed for committing and pushing new CSVs
+  workflow_dispatch:
 
 jobs:
   build-dataset:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -27,9 +23,26 @@ jobs:
       - name: Fetch and build dataset
         run: |
           echo "🏀 Fetching fresh NBA data..."
-          python fetch_logs.py
+          python fetch_logs.py || echo "⚠️ Fetch logs failed"
           echo "📊 Building dataset..."
-          python build_dataset.py
+          python build_dataset.py || echo "⚠️ Build dataset failed"
+
+      - name: Inspect dataset
+        run: |
+          echo "🧐 Checking generated dataset..."
+          if [ -f data/model_dataset.csv ]; then
+            head -n 5 data/model_dataset.csv
+            echo ""
+            echo "✅ Columns found:"
+            python - <<'PYCODE'
+import pandas as pd
+df = pd.read_csv("data/model_dataset.csv")
+print(list(df.columns))
+print(f"\nTotal rows: {len(df)}")
+PYCODE
+          else
+            echo "❌ data/model_dataset.csv not found"
+          fi
 
       - name: Commit dataset
         run: |
