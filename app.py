@@ -57,25 +57,36 @@ def run_pipeline_task(log_container):
 
 
 # -------------------------------
-# Sidebar Controls
+# Sidebar Controls (safe version)
 # -------------------------------
 st.sidebar.header("⚙️ Admin Controls")
 
 if st.sidebar.button("🚀 Run Full Pipeline"):
-    log_placeholder = st.empty()
-    with st.spinner("Running full pipeline... please wait."):
-        thread = threading.Thread(target=run_pipeline_task, args=(log_placeholder,))
-        thread.start()
+    placeholder = st.empty()
 
-        # Keep UI responsive
-        while thread.is_alive():
-            time.sleep(1)
+    with st.spinner("Running full pipeline... this might take a few minutes..."):
+        # Run pipeline synchronously (no thread → no NoSessionContext)
+        commands = [
+            ("Fetching raw game logs...", ["python", "fetch_logs.py"]),
+            ("Building dataset...", ["python", "build_dataset.py"]),
+            ("Training models...", ["python", "train_model.py"]),
+        ]
 
-        # Refresh Streamlit cache after retraining
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.success("✅ Pipeline finished and reloaded successfully.")
-        st.experimental_rerun()
+        for desc, cmd in commands:
+            st.info(f"🌀 {desc}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                st.error(f"❌ Error during {desc}\n\n{result.stderr}")
+                st.stop()
+            else:
+                st.success(f"✅ {desc} complete.")
+                st.code(result.stdout[-800:], language="text")
+
+    # Clear caches and reload app
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.success("✅ Pipeline finished and reloaded successfully.")
+    st.rerun()
 
 
 # -------------------------------
