@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import xgboost as xgb
 import subprocess
-import threading
-import time
 import os
+import sys
 from pathlib import Path
 
 # -------------------------------
@@ -20,73 +19,52 @@ MODEL_DIR = Path("models")
 # -------------------------------
 @st.cache_data
 def load_df():
-    """Load the processed dataset"""
+    """Load processed dataset"""
     return pd.read_csv(DATA_DIR / "model_dataset.csv")
 
 @st.cache_resource
 def load_model(name):
-    """Load an XGBoost model"""
+    """Load XGBoost model"""
     model = xgb.XGBRegressor()
     model.load_model(MODEL_DIR / f"{name}.json")
     return model
 
 
 # -------------------------------
-# Full Pipeline Runner
+# Full Pipeline Runner (uses same Python env)
 # -------------------------------
-def run_pipeline_task(log_container):
-    """Run the full data → training pipeline in sequence"""
+def run_full_pipeline():
     commands = [
-        ("Fetching raw game logs...", ["python", "fetch_logs.py"]),
-        ("Building dataset...", ["python", "build_dataset.py"]),
-        ("Training models...", ["python", "train_model.py"]),
+        ("Fetching raw game logs...", [sys.executable, "fetch_logs.py"]),
+        ("Building dataset...", [sys.executable, "build_dataset.py"]),
+        ("Training models...", [sys.executable, "train_model.py"]),
     ]
 
     for desc, cmd in commands:
-        log_container.info(f"🌀 {desc}")
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            log_container.success(f"✅ {desc} complete.")
-            log_container.code(result.stdout[-1500:], language="text")
-        except subprocess.CalledProcessError as e:
-            log_container.error(f"❌ {desc} failed:\n{e.stderr}")
-            return False
+        st.info(f"🌀 {desc}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            st.error(f"❌ Error during {desc}\n\n{result.stderr}")
+            st.stop()
+        else:
+            st.success(f"✅ {desc} complete.")
+            st.code(result.stdout[-800:], language="text")
 
-    log_container.success("🎉 Full pipeline completed successfully.")
-    return True
-
-
-# -------------------------------
-# Sidebar Controls (safe version)
-# -------------------------------
-st.sidebar.header("⚙️ Admin Controls")
-
-if st.sidebar.button("🚀 Run Full Pipeline"):
-    placeholder = st.empty()
-
-    with st.spinner("Running full pipeline... this might take a few minutes..."):
-        # Run pipeline synchronously (no thread → no NoSessionContext)
-        commands = [
-            ("Fetching raw game logs...", ["python", "fetch_logs.py"]),
-            ("Building dataset...", ["python", "build_dataset.py"]),
-            ("Training models...", ["python", "train_model.py"]),
-        ]
-
-        for desc, cmd in commands:
-            st.info(f"🌀 {desc}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                st.error(f"❌ Error during {desc}\n\n{result.stderr}")
-                st.stop()
-            else:
-                st.success(f"✅ {desc} complete.")
-                st.code(result.stdout[-800:], language="text")
-
-    # Clear caches and reload app
+    # Clear caches and reload
     st.cache_data.clear()
     st.cache_resource.clear()
     st.success("✅ Pipeline finished and reloaded successfully.")
     st.rerun()
+
+
+# -------------------------------
+# Sidebar Controls
+# -------------------------------
+st.sidebar.header("⚙️ Admin Controls")
+
+if st.sidebar.button("🚀 Run Full Pipeline"):
+    with st.spinner("Running full pipeline... please wait..."):
+        run_full_pipeline()
 
 
 # -------------------------------
