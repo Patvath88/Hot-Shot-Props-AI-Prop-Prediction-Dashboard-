@@ -2,9 +2,9 @@ name: Daily Model Refresh
 
 on:
   schedule:
-    # Run daily at 7:00 AM EST (12:00 UTC)
+    # Run daily at 7 AM EST (12 UTC)
     - cron: "0 12 * * *"
-  workflow_dispatch:  # allow manual runs
+  workflow_dispatch:  # allow manual trigger
 
 jobs:
   refresh:
@@ -26,15 +26,15 @@ jobs:
 
       - name: Run data + model pipeline
         run: |
-          echo "Running daily NBA data refresh..."
+          echo "🏀 Running daily NBA model refresh..."
           python fetch_logs.py
           python build_dataset.py
           python train_model.py
 
-      - name: Commit and push updates
+      - name: Commit and push updated models + data
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add data/ models/
-          git commit -m "🤖 Daily auto-refresh at 7AM EST" || echo "No changes to commit"
+          git commit -m "🤖 Automated daily model refresh (multi-model)" || echo "No changes to commit"
           git push
