@@ -1,42 +1,44 @@
 name: Manual Dataset Build
 
 on:
-  workflow_dispatch:       # ✅ Enables the “Run workflow” button
+  workflow_dispatch:  # ✅ This enables the "Run workflow" button manually
 
 jobs:
-  build-dataset:
+  build_dataset:
+    name: 🏗 Build NBA Dataset
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: 🧾 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pandas requests
 
-      - name: Fetch NBA game logs
+      - name: 🏀 Fetch NBA data from Ball Don't Lie API
         run: |
-          echo "🏀 Fetching fresh NBA data..."
+          echo "Fetching latest NBA data..."
           python fetch_logs.py || echo "⚠️ Fetch logs failed"
 
-      - name: Build dataset
+      - name: 🧠 Build enriched dataset
         run: |
-          echo "📊 Building dataset..."
+          echo "Building dataset..."
           python build_dataset.py || echo "⚠️ Build dataset failed"
 
-      - name: Inspect dataset
+      - name: 🔍 Inspect dataset
         run: |
-          echo "🧐 Checking generated dataset..."
+          echo "Checking dataset structure..."
           if [ -f data/model_dataset.csv ]; then
             head -n 5 data/model_dataset.csv
             echo ""
-            echo "✅ Columns found:"
+            echo "✅ Columns detected:"
             python - <<'PYCODE'
 import pandas as pd
 df = pd.read_csv("data/model_dataset.csv")
@@ -44,13 +46,13 @@ print(list(df.columns))
 print(f"\nTotal rows: {len(df)}")
 PYCODE
           else
-            echo "❌ data/model_dataset.csv not found"
+            echo "❌ model_dataset.csv not found"
           fi
 
-      - name: Commit and push updates
+      - name: 💾 Commit and push dataset
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add data/raw_logs.csv data/model_dataset.csv || echo "No files to add"
-          git commit -m "🤖 Manual dataset rebuild triggered via workflow_dispatch" || echo "No changes to commit"
+          git commit -m "🤖 Manual dataset rebuild triggered manually" || echo "No changes to commit"
           git push || echo "No changes to push"
