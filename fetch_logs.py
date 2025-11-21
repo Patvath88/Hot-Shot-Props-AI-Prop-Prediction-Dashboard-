@@ -10,9 +10,8 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 RAW_LOGS_FILE = DATA_DIR / "raw_logs.csv"
 
-# Hardcode your Ball Don't Lie API key here:
-API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # 🔒 Replace with your real key
-
+# Hardcoded Ball Don't Lie API key
+API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # Replace with your actual key
 if not API_KEY:
     raise ValueError("❌ Missing BALL_DONT_LIE_API_KEY — please set it in the code.")
 
@@ -36,8 +35,10 @@ def fetch_active_players():
         data = resp.json()
         players.extend(data.get("data", []))
 
+        # ✅ Modern pagination handling
         meta = data.get("meta", {})
-        next_page = meta.get("next_page") or meta.get("next")  # support both formats
+        next_page = meta.get("next_page") or meta.get("next") or meta.get("next_cursor")
+
         if not next_page:
             break
 
@@ -60,16 +61,20 @@ def fetch_player_game_logs(player_id, season=2025):
             print(f"⚠️ Error fetching stats for player {player_id} page {page}")
             break
         data = resp.json()
-        logs.extend(data["data"])
-        if data["meta"]["next_page"] is None:
+        logs.extend(data.get("data", []))
+
+        meta = data.get("meta", {})
+        next_page = meta.get("next_page") or meta.get("next") or meta.get("next_cursor")
+        if not next_page:
             break
+
         page += 1
         time.sleep(0.5)
     return logs
 
 
 # -------------------------------------------------
-# MAIN FETCH PIPELINE
+# MAIN PIPELINE
 # -------------------------------------------------
 def main():
     print("🏀 Fetching all active players...")
@@ -94,7 +99,7 @@ def main():
                 "threept_fg": g["fg3m"],
                 "steals": g["stl"],
                 "blocks": g["blk"],
-                "minutes": int(g["min"].split(":")[0]) if g["min"] else 0,
+                "minutes": int(g["min"].split(":")[0]) if g.get("min") else 0,
             }
             all_logs.append(stats)
         time.sleep(0.5)
