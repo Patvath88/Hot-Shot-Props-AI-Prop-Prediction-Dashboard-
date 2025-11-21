@@ -39,12 +39,13 @@ jobs:
             head -n 5 data/model_dataset.csv
             echo ""
             echo "✅ Columns detected:"
-            python - <<'PYCODE'
+            cat <<'PYCODE' > inspect_dataset.py
 import pandas as pd
 df = pd.read_csv("data/model_dataset.csv")
 print(list(df.columns))
 print(f"\nTotal rows: {len(df)}")
 PYCODE
+            python inspect_dataset.py
           else
             echo "❌ model_dataset.csv not found"
           fi
