@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import xgboost as xgb
+import os
 
 st.set_page_config(page_title="NBA Projections", layout="wide")
 
@@ -21,10 +22,10 @@ try:
     model_reb = load_model("rebounds")
     model_ast = load_model("assists")
 except:
-    st.error("❌ Models missing — train them first.")
+    st.error("Models missing. Train them first.")
     st.stop()
 
-st.title("🏀 NBA Player Projections (BallDontLie All-Star Tier)")
+st.title("🏀 NBA Player Projections (BallDontLie All-Star)")
 
 players = sorted(df["player_name"].unique())
 player = st.selectbox("Select Player", players)
@@ -47,10 +48,9 @@ pred_reb = model_reb.predict(X)[0]
 pred_ast = model_ast.predict(X)[0]
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Points Projection", f"{pred_pts:.1f}")
-col2.metric("Rebounds Projection", f"{pred_reb:.1f}")
-col3.metric("Assists Projection", f"{pred_ast:.1f}")
+col1.metric("Projected Points", f"{pred_pts:.1f}")
+col2.metric("Projected Rebounds", f"{pred_reb:.1f}")
+col3.metric("Projected Assists", f"{pred_ast:.1f}")
 
 st.subheader("📈 Last 10 Games")
-chart = pdf.tail(10).set_index("GAME_DATE")[["points", "rebounds", "assists"]]
-st.line_chart(chart)
+st.line_chart(pdf.tail(10).set_index("GAME_DATE")[["points", "rebounds", "assists"]])
