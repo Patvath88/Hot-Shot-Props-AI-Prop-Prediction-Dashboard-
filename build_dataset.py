@@ -11,7 +11,7 @@ def build_dataset():
     df = pd.read_csv(RAW_PATH)
     df = df.sort_values(["player_name", "GAME_DATE"])
 
-    # compute rolling averages per player
+    # rolling averages
     for col in ["points", "rebounds", "assists", "threept_fg", "steals", "blocks", "minutes"]:
         df[f"{col}_rolling5"] = (
             df.groupby("player_name")[col]
