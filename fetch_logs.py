@@ -30,12 +30,17 @@ def fetch_active_players():
     while True:
         resp = requests.get(f"{BASE_URL}/players", params={"page": page, "per_page": 100}, headers=HEADERS)
         if resp.status_code != 200:
-            print(f"⚠️ Failed fetching players page {page}")
+            print(f"⚠️ Failed fetching players page {page}: {resp.text}")
             break
+
         data = resp.json()
-        players.extend(data["data"])
-        if data["meta"]["next_page"] is None:
+        players.extend(data.get("data", []))
+
+        meta = data.get("meta", {})
+        next_page = meta.get("next_page") or meta.get("next")  # support both formats
+        if not next_page:
             break
+
         page += 1
         time.sleep(0.5)
     return pd.DataFrame(players)
