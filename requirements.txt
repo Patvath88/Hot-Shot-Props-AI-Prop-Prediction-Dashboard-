@@ -2,7 +2,6 @@ streamlit
 pandas
 numpy
 requests
-scikit-learn
 xgboost
-pyarrow
-python-dateutil
+scikit-learn
+python-dotenv
