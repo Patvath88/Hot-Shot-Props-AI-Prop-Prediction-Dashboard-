@@ -1,37 +1,44 @@
 import streamlit as st
 import pandas as pd
 import xgboost as xgb
-import subprocess
+import lightgbm as lgb
+import joblib
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 # -------------------------------
-# Streamlit Page Configuration
+# Streamlit Configuration
 # -------------------------------
-st.set_page_config(page_title="NBA Projections", layout="wide")
+st.set_page_config(page_title="NBA Multi-Model Projections", layout="wide")
 
 DATA_DIR = Path("data")
 MODEL_DIR = Path("models")
 
 # -------------------------------
-# Cached Loaders
+# Caching Utilities
 # -------------------------------
 @st.cache_data
 def load_df():
-    """Load processed dataset"""
     return pd.read_csv(DATA_DIR / "model_dataset.csv")
 
 @st.cache_resource
-def load_model(name):
-    """Load XGBoost model"""
+def load_xgb_model(target):
     model = xgb.XGBRegressor()
-    model.load_model(MODEL_DIR / f"{name}.json")
+    model.load_model(MODEL_DIR / f"{target}_xgb.json")
     return model
 
+@st.cache_resource
+def load_lgb_model(target):
+    return joblib.load(MODEL_DIR / f"{target}_lgb.pkl")
+
+@st.cache_resource
+def load_rf_model(target):
+    return joblib.load(MODEL_DIR / f"{target}_rf.pkl")
 
 # -------------------------------
-# Full Pipeline Runner (uses same Python env)
+# Pipeline Rerun Utility
 # -------------------------------
 def run_full_pipeline():
     commands = [
@@ -39,7 +46,6 @@ def run_full_pipeline():
         ("Building dataset...", [sys.executable, "build_dataset.py"]),
         ("Training models...", [sys.executable, "train_model.py"]),
     ]
-
     for desc, cmd in commands:
         st.info(f"🌀 {desc}")
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -50,12 +56,10 @@ def run_full_pipeline():
             st.success(f"✅ {desc} complete.")
             st.code(result.stdout[-800:], language="text")
 
-    # Clear caches and reload
     st.cache_data.clear()
     st.cache_resource.clear()
-    st.success("✅ Pipeline finished and reloaded successfully.")
+    st.success("✅ Pipeline finished successfully.")
     st.rerun()
-
 
 # -------------------------------
 # Sidebar Controls
@@ -66,32 +70,33 @@ if st.sidebar.button("🚀 Run Full Pipeline"):
     with st.spinner("Running full pipeline... please wait..."):
         run_full_pipeline()
 
-
 # -------------------------------
-# Verify Data & Models
+# Check prerequisites
 # -------------------------------
-required_models = ["points", "rebounds", "assists"]
-missing_data = not (DATA_DIR / "model_dataset.csv").exists()
-missing_models = any(not (MODEL_DIR / f"{m}.json").exists() for m in required_models)
-
-if missing_data or missing_models:
-    st.warning("⚠️ Data or models missing. Please run the full pipeline from the sidebar.")
+if not (DATA_DIR / "model_dataset.csv").exists() or not any(MODEL_DIR.glob("*.json")):
+    st.warning("⚠️ Models or data missing. Run the full pipeline first.")
     st.stop()
 
-
 # -------------------------------
-# Load Models and Data
+# Load Data + Models
 # -------------------------------
 df = load_df()
-model_pts = load_model("points")
-model_reb = load_model("rebounds")
-model_ast = load_model("assists")
 
+TARGETS = [
+    "points", "rebounds", "assists",
+    "threept_fg", "steals", "blocks",
+    "points_assists", "points_rebounds", "rebounds_assists",
+    "points_rebounds_assists", "minutes"
+]
+
+xgb_models = {t: load_xgb_model(t) for t in TARGETS}
+lgb_models = {t: load_lgb_model(t) for t in TARGETS}
+rf_models = {t: load_rf_model(t) for t in TARGETS}
 
 # -------------------------------
-# Main Dashboard UI
+# Dashboard
 # -------------------------------
-st.title("🏀 NBA Player Projections Dashboard")
+st.title("🏀 NBA Multi-Model Player Projections Dashboard")
 
 players = sorted(df["player_name"].unique())
 player = st.selectbox("Select Player", players)
@@ -100,23 +105,42 @@ pdf = df[df["player_name"] == player].sort_values("GAME_DATE")
 latest = pdf.iloc[-1]
 
 FEATURES = [
-    "points_rolling5",
-    "rebounds_rolling5",
-    "assists_rolling5",
-    "minutes_rolling5",
-    "minutes",
+    "points_rolling5", "rebounds_rolling5", "assists_rolling5",
+    "threept_fg_rolling5", "steals_rolling5", "blocks_rolling5", "minutes_rolling5",
+    "points_var5", "rebounds_var5", "assists_var5",
+    "threept_fg_var5", "steals_var5", "blocks_var5", "minutes_var5",
+    "rest_days",
+    "season_points_avg", "season_reb_avg", "season_ast_avg", "season_min_avg"
 ]
 X = latest[FEATURES].values.reshape(1, -1)
 
-st.subheader(player)
+# -------------------------------
+# Predictions Table
+# -------------------------------
+st.subheader(f"📊 {player} — Projected Stats")
 
-# Prediction Metrics
-col1, col2, col3 = st.columns(3)
-col1.metric("Projected Points", f"{model_pts.predict(X)[0]:.1f}")
-col2.metric("Projected Rebounds", f"{model_reb.predict(X)[0]:.1f}")
-col3.metric("Projected Assists", f"{model_ast.predict(X)[0]:.1f}")
+table_data = []
+for stat in TARGETS:
+    xgb_pred = xgb_models[stat].predict(X)[0]
+    lgb_pred = lgb_models[stat].predict(X)[0]
+    rf_pred = rf_models[stat].predict(X)[0]
+    avg_pred = (xgb_pred + lgb_pred + rf_pred) / 3
+    table_data.append({
+        "Stat": stat.replace("_", " ").title(),
+        "XGBoost": round(xgb_pred, 2),
+        "LightGBM": round(lgb_pred, 2),
+        "RandomForest": round(rf_pred, 2),
+        "Ensemble Avg": round(avg_pred, 2)
+    })
 
-# Recent Performance Chart
-st.line_chart(pdf.tail(10).set_index("GAME_DATE")[["points", "rebounds", "assists"]])
+table_df = pd.DataFrame(table_data)
+st.dataframe(table_df, use_container_width=True)
 
-st.caption("📊 Data powered by balldontlie.io | Models trained using XGBoost")
+# -------------------------------
+# Recent Trend Chart
+# -------------------------------
+st.subheader("📈 Recent Performance (Last 10 Games)")
+chart_cols = ["points", "rebounds", "assists", "threept_fg", "steals", "blocks"]
+st.line_chart(pdf.tail(10).set_index("GAME_DATE")[chart_cols])
+
+st.caption("🤖 All models auto-refresh daily at 7 AM EST | Built with XGBoost, LightGBM & RandomForest")
