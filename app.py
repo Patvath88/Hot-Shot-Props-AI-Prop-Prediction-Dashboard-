@@ -8,7 +8,11 @@ from pathlib import Path
 import json
 import os
 import time
-
+# -------------------------------------------------
+# PATHS
+# -------------------------------------------------
+DATA_DIR = Path("data")
+MODELS_DIR = Path("models")
 # ----------------------------------------------------
 # CONFIG & DIAGNOSTIC LOADER
 # ----------------------------------------------------
