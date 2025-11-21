@@ -20,6 +20,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas requests
 
+      - name: Debug fetch_logs.py
+        run: |
+          echo "🕵️ Checking first 20 lines of fetch_logs.py..."
+          head -n 20 fetch_logs.py
+
       - name: Fetch and build dataset
         run: |
           echo "🏀 Fetching fresh NBA data..."
@@ -43,11 +48,3 @@ PYCODE
           else
             echo "❌ data/model_dataset.csv not found"
           fi
-
-      - name: Commit dataset
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add data/model_dataset.csv
-          git commit -m "🤖 Auto-generated model_dataset.csv" || echo "No changes to commit"
-          git push || echo "No changes to push"
