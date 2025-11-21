@@ -12,6 +12,31 @@ jobs:
       - name: 🧾 Checkout repository
         uses: actions/checkout@v4
 
+      - name: 🧪 Check fetch_logs.py version
+        run: |
+          echo "🔍 Checking fetch_logs.py version..."
+          if [ -f fetch_logs.py ]; then
+            python - <<'PYCODE'
+from pathlib import Path
+path = Path("fetch_logs.py")
+if not path.exists():
+    print("❌ fetch_logs.py not found!")
+else:
+    contents = path.read_text()
+    if "next_page" in contents:
+        print("❌ Old version detected: using 'next_page'")
+    elif "next_cursor" in contents:
+        print("✅ New version confirmed: using 'next_cursor'")
+    else:
+        print("⚠️ No pagination keyword found.")
+    print("\n--- First 20 lines of fetch_logs.py ---")
+    for i, line in enumerate(contents.splitlines()[:20], 1):
+        print(f"{i:02d}: {line}")
+PYCODE
+          else
+            echo "❌ fetch_logs.py not found in repository!"
+          fi
+
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
@@ -22,12 +47,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas requests
 
-      - name: 🏀 Fetch NBA data from Ball Don't Lie API
+      - name: 🏀 Fetch NBA data
         run: |
           echo "Fetching latest NBA data..."
           python fetch_logs.py || echo "⚠️ Fetch logs failed"
 
-      - name: 🧠 Build enriched dataset
+      - name: 🧠 Build dataset
         run: |
           echo "Building dataset..."
           python build_dataset.py || echo "⚠️ Build dataset failed"
