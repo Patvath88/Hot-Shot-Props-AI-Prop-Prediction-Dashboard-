@@ -11,7 +11,8 @@ DATA_DIR.mkdir(exist_ok=True)
 RAW_LOGS_FILE = DATA_DIR / "raw_logs.csv"
 
 # Hardcoded Ball Don't Lie API key
-API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # Replace with your actual key
+API_KEY = "7f4db7a9-c34e-478d-a799-fef77b9d1f78"  # Replace with your real key
+
 if not API_KEY:
     raise ValueError("❌ Missing BALL_DONT_LIE_API_KEY — please set it in the code.")
 
@@ -23,11 +24,19 @@ BASE_URL = "https://api.balldontlie.io/v1"
 # FETCH FUNCTIONS
 # -------------------------------------------------
 def fetch_active_players():
-    """Fetch list of all active NBA players."""
+    """Fetch list of all active NBA players (handles new and old pagination)."""
     players = []
     page = 1
+    cursor = None
+
     while True:
-        resp = requests.get(f"{BASE_URL}/players", params={"page": page, "per_page": 100}, headers=HEADERS)
+        params = {"per_page": 100}
+        if cursor:
+            params["cursor"] = cursor
+        else:
+            params["page"] = page
+
+        resp = requests.get(f"{BASE_URL}/players", params=params, headers=HEADERS)
         if resp.status_code != 200:
             print(f"⚠️ Failed fetching players page {page}: {resp.text}")
             break
@@ -35,15 +44,16 @@ def fetch_active_players():
         data = resp.json()
         players.extend(data.get("data", []))
 
-        # ✅ Modern pagination handling
+        # ✅ Handle both pagination formats gracefully
         meta = data.get("meta", {})
-        next_page = meta.get("next_page") or meta.get("next") or meta.get("next_cursor")
+        cursor = meta.get("next_cursor")
 
-        if not next_page:
+        if not cursor and not meta.get("next_page"):
             break
 
         page += 1
         time.sleep(0.5)
+
     return pd.DataFrame(players)
 
 
@@ -51,25 +61,32 @@ def fetch_player_game_logs(player_id, season=2025):
     """Fetch game logs for a given player."""
     logs = []
     page = 1
+    cursor = None
+
     while True:
-        resp = requests.get(
-            f"{BASE_URL}/stats",
-            params={"player_ids[]": player_id, "seasons[]": season, "per_page": 100, "page": page},
-            headers=HEADERS,
-        )
+        params = {"player_ids[]": player_id, "seasons[]": season, "per_page": 100}
+        if cursor:
+            params["cursor"] = cursor
+        else:
+            params["page"] = page
+
+        resp = requests.get(f"{BASE_URL}/stats", params=params, headers=HEADERS)
         if resp.status_code != 200:
             print(f"⚠️ Error fetching stats for player {player_id} page {page}")
             break
+
         data = resp.json()
         logs.extend(data.get("data", []))
 
         meta = data.get("meta", {})
-        next_page = meta.get("next_page") or meta.get("next") or meta.get("next_cursor")
-        if not next_page:
+        cursor = meta.get("next_cursor")
+
+        if not cursor and not meta.get("next_page"):
             break
 
         page += 1
         time.sleep(0.5)
+
     return logs
 
 
@@ -89,16 +106,16 @@ def main():
         print(f"⛓ Fetching logs for {name} (ID {pid})")
         logs = fetch_player_game_logs(pid)
         for g in logs:
-            game = g["game"]
+            game = g.get("game", {})
             stats = {
-                "GAME_DATE": game["date"].split("T")[0],
+                "GAME_DATE": game.get("date", "").split("T")[0] if game.get("date") else "",
                 "player_name": name,
-                "points": g["pts"],
-                "rebounds": g["reb"],
-                "assists": g["ast"],
-                "threept_fg": g["fg3m"],
-                "steals": g["stl"],
-                "blocks": g["blk"],
+                "points": g.get("pts", 0),
+                "rebounds": g.get("reb", 0),
+                "assists": g.get("ast", 0),
+                "threept_fg": g.get("fg3m", 0),
+                "steals": g.get("stl", 0),
+                "blocks": g.get("blk", 0),
                 "minutes": int(g["min"].split(":")[0]) if g.get("min") else 0,
             }
             all_logs.append(stats)
