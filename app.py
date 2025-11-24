@@ -54,7 +54,7 @@ def load_models():
 # -------------------------------------------------
 # API CONNECTIONS
 # -------------------------------------------------
-BALL_DONT_LIE_API_KEY = os.getenv("BALL_DONT_LIE_API_KEY")
+BALL_DONT_LIE_API_KEY = os.getenv("7f4db7a9-c34e-478d-a799-fef77b9d1f78")
 API_HEADERS = {"Authorization": f"Bearer {BALL_DONT_LIE_API_KEY}"} if BALL_DONT_LIE_API_KEY else {}
 
 def fetch_next_game(player_name):
