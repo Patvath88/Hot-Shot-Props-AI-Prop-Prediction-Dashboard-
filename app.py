@@ -1,197 +1,169 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import json
+import joblib
 import requests
-import lightgbm as lgb
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from pathlib import Path
-from PIL import Image
 from io import BytesIO
-import plotly.express as px
-import datetime
+from PIL import Image
+from pathlib import Path
+import plotly.graph_objects as go
 
-# ---------------------------------------------------
-# CONFIG & DIRECTORIES
-# ---------------------------------------------------
-DATA_FILE = Path("data/model_dataset.csv")
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
+st.set_page_config(page_title="🏀 Hot Shot Props AI", layout="wide", page_icon="🏀")
+DATA_PATH = Path("data/model_dataset.csv")
 MODELS_DIR = Path("models")
-IMAGES_DIR = Path("data/player_images")
-LOGOS_DIR = Path("data/team_logos")
-FAV_FILE = Path("favorites.json")
+MODELS_DIR.mkdir(exist_ok=True)
 
-for d in [MODELS_DIR, IMAGES_DIR, LOGOS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
-
-st.set_page_config(page_title="🏀 Hot Shot Props AI Dashboard", layout="wide")
-
-# ---------------------------------------------------
-# LOADERS & HELPERS
-# ---------------------------------------------------
+# -------------------------------------------------
+# UTILITIES
+# -------------------------------------------------
+@st.cache_data
 def load_data():
-    if not DATA_FILE.exists():
-        st.error("❌ model_dataset.csv not found. Please run a refresh workflow.")
-        st.stop()
-    return pd.read_csv(DATA_FILE)
+    return pd.read_csv(DATA_PATH)
+
+@st.cache_resource
+def load_models():
+    models = {}
+    for stat in ["points", "rebounds", "assists", "minutes", "steals", "blocks", "turnovers"]:
+        try:
+            models[stat] = {
+                "rf": joblib.load(MODELS_DIR / f"rf_{stat}.pkl"),
+                "xgb": joblib.load(MODELS_DIR / f"xgb_{stat}.pkl"),
+                "lgbm": joblib.load(MODELS_DIR / f"lgbm_{stat}.pkl")
+            }
+        except:
+            models[stat] = None
+    return models
 
 @st.cache_data
-def get_player_image(player_name):
-    clean_name = player_name.lower().replace(" ", "_")
-    img_path = IMAGES_DIR / f"{clean_name}.png"
-    if img_path.exists():
-        return Image.open(img_path)
+def get_player_image(name):
     try:
-        url = f"https://cdn.nba.com/headshots/nba/latest/260x190/{clean_name}.png"
-        r = requests.get(url)
-        if r.status_code == 200:
-            img_path.write_bytes(r.content)
-            return Image.open(BytesIO(r.content))
-    except Exception:
+        first, last = name.split(" ", 1)
+        url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{first.lower()}_{last.lower()}.png"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return Image.open(BytesIO(response.content))
+    except:
+        pass
+    return Image.open(BytesIO(requests.get("https://cdn.nba.com/logos/nba/nba-logoman-word-white.svg").content))
+
+@st.cache_data
+def get_team_logo(team_abbrev):
+    try:
+        url = f"https://cdn.nba.com/logos/nba/{team_abbrev}/primary/L/logo.svg"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return url
+    except:
         pass
     return None
 
-@st.cache_data
-def get_team_logo(team_abbr):
-    logo_path = LOGOS_DIR / f"{team_abbr}.png"
-    if logo_path.exists():
-        return Image.open(logo_path)
-    try:
-        url = f"https://cdn.nba.com/logos/nba/{team_abbr}/global/L/logo.svg"
-        r = requests.get(url)
-        if r.status_code == 200:
-            logo_path.write_bytes(r.content)
-            return Image.open(BytesIO(r.content))
-    except Exception:
-        pass
-    return None
+def predict_player(player_name, df, models):
+    player_data = df[df["player_name"] == player_name].tail(1)
+    if player_data.empty:
+        return None
+    preds = {}
+    for stat, model_set in models.items():
+        if model_set:
+            try:
+                latest = player_data[model_set["rf"].feature_names_in_]
+                avg_pred = np.mean([
+                    model_set["rf"].predict(latest)[0],
+                    model_set["xgb"].predict(latest)[0],
+                    model_set["lgbm"].predict(latest)[0]
+                ])
+                preds[stat] = avg_pred
+            except Exception as e:
+                preds[stat] = None
+    # Combo projections
+    preds["PA"] = (preds.get("points", 0) or 0) + (preds.get("assists", 0) or 0)
+    preds["PR"] = (preds.get("points", 0) or 0) + (preds.get("rebounds", 0) or 0)
+    preds["RA"] = (preds.get("rebounds", 0) or 0) + (preds.get("assists", 0) or 0)
+    preds["PRA"] = preds["PA"] + (preds.get("rebounds", 0) or 0)
+    return preds
 
-def load_or_train_models(df):
-    # for demo, we skip full retrain; can add logic if missing
-    return True
-
-def predict_player(player_name, df):
-    """Predict player stats using averaged model approach."""
-    row = df[df["player_name"] == player_name].tail(1)
-    if row.empty:
-        return {}
-
-    # Simulated averages (replace with model predictions)
-    base = {
-        "points": np.random.uniform(10, 35),
-        "rebounds": np.random.uniform(3, 15),
-        "assists": np.random.uniform(2, 12),
-        "steals": np.random.uniform(0.3, 2.5),
-        "blocks": np.random.uniform(0.3, 2.5),
-        "minutes": np.random.uniform(20, 38),
-        "turnovers": np.random.uniform(1, 5),
-    }
-
-    base["PA"] = base["points"] + base["assists"]
-    base["PR"] = base["points"] + base["rebounds"]
-    base["RA"] = base["rebounds"] + base["assists"]
-    base["PRA"] = base["points"] + base["rebounds"] + base["assists"]
-
-    return {k: round(v, 1) for k, v in base.items()}
-
-def save_favorite(player, preds):
-    data = []
-    if FAV_FILE.exists():
-        data = json.load(open(FAV_FILE))
-    preds["player"] = player
-    preds["timestamp"] = str(datetime.date.today())
-    data = [d for d in data if d["player"] != player]
-    data.append(preds)
-    json.dump(data, open(FAV_FILE, "w"), indent=2)
-
-# ---------------------------------------------------
-# APP LAYOUT
-# ---------------------------------------------------
-st.sidebar.title("🏀 Hot Shot Props AI Dashboard")
-tab = st.sidebar.radio("Navigate", [
-    "🏠 Home / Favorites",
-    "🧠 Prop Projection Lab",
-    "📈 Projection Tracker",
-    "🔬 Prop Research Lab"
-])
-
+# -------------------------------------------------
+# APP CONTENT
+# -------------------------------------------------
 df = load_data()
-players = sorted(df["player_name"].unique())
+models = load_models()
+tabs = st.tabs(["🏠 Home / Favorites", "🧠 Prop Projection Lab", "📊 Projection Tracker", "🔍 Prop Research Lab"])
 
-# ---------------------------------------------------
+# -------------------------------------------------
 # HOME TAB
-# ---------------------------------------------------
-if tab == "🏠 Home / Favorites":
-    st.title("⭐ Favorite Players - Auto Updated Daily")
+# -------------------------------------------------
+with tabs[0]:
+    st.title("🏀 Hot Shot Props AI Dashboard")
+    st.write("Your saved favorite players and their latest projections refresh automatically every morning.")
+    if "favorites" not in st.session_state:
+        st.session_state["favorites"] = []
+    for fav in st.session_state["favorites"]:
+        preds = predict_player(fav, df, models)
+        if preds:
+            st.subheader(f"{fav}")
+            cols = st.columns(4)
+            for i, (stat, value) in enumerate(preds.items()):
+                cols[i % 4].metric(label=stat.upper(), value=round(value, 2))
 
-    if FAV_FILE.exists():
-        favorites = json.load(open(FAV_FILE))
-        for fav in favorites:
-            player = fav["player"]
-            preds = predict_player(player, df)  # refresh predictions daily
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                img = get_player_image(player)
-                if img:
-                    st.image(img, width=120)
-            with col2:
-                st.subheader(f"🏀 {player}")
-                st.write(f"**PTS:** {preds['points']} | **REB:** {preds['rebounds']} | **AST:** {preds['assists']} | **PRA:** {preds['PRA']}")
-                st.caption(f"Updated: {datetime.date.today()}")
+# -------------------------------------------------
+# PROP PROJECTION LAB
+# -------------------------------------------------
+with tabs[1]:
+    st.header("🧠 Player Projection Lab")
+    players = sorted(df["player_name"].unique())
+    player_name = st.selectbox("Select Player", players, index=None, placeholder="Choose a player...")
+    if player_name:
+        preds = predict_player(player_name, df, models)
+        if preds:
+            img = get_player_image(player_name)
+            st.image(img, width=200)
+            st.subheader(f"Projected Stats for {player_name}")
+            cols = st.columns(4)
+            for i, (stat, val) in enumerate(preds.items()):
+                cols[i % 4].metric(label=stat.upper(), value=round(val, 2))
+            if st.button("⭐ Add to Favorites"):
+                if player_name not in st.session_state["favorites"]:
+                    st.session_state["favorites"].append(player_name)
+                    st.success(f"Added {player_name} to favorites!")
+
+# -------------------------------------------------
+# TRACKER TAB
+# -------------------------------------------------
+with tabs[2]:
+    st.header("📊 Projection Tracker")
+    if "tracked" not in st.session_state:
+        st.session_state["tracked"] = []
+    st.write("Track your saved projections and compare to actual results.")
+    if st.session_state["tracked"]:
+        for t in st.session_state["tracked"]:
+            st.write(t)
     else:
-        st.info("You have no saved favorites yet. Save some from the Projection Lab!")
+        st.info("No projections tracked yet.")
 
-# ---------------------------------------------------
-# PROJECTION LAB
-# ---------------------------------------------------
-elif tab == "🧠 Prop Projection Lab":
-    st.title("🧠 Prop Projection Lab")
-    player = st.selectbox("Select Player", players)
-
-    if player:
-        preds = predict_player(player, df)
-        img = get_player_image(player)
-        if img:
-            st.image(img, width=220, caption=player)
-
-        st.subheader(f"📊 Predicted Stats for {player}")
-        cols = st.columns(5)
-        metrics = list(preds.keys())
-        for i, key in enumerate(metrics):
-            with cols[i % 5]:
-                st.metric(key.upper(), preds[key])
-
-        if st.button("⭐ Save Player to Favorites"):
-            save_favorite(player, preds)
-            st.success(f"✅ Saved {player} to favorites!")
-
-# ---------------------------------------------------
-# PROJECTION TRACKER
-# ---------------------------------------------------
-elif tab == "📈 Projection Tracker":
-    st.title("📈 Projection Tracker")
-    if FAV_FILE.exists():
-        data = json.load(open(FAV_FILE))
-        st.dataframe(pd.DataFrame(data))
-    else:
-        st.warning("No saved projections found yet!")
-
-# ---------------------------------------------------
-# RESEARCH LAB
-# ---------------------------------------------------
-elif tab == "🔬 Prop Research Lab":
-    st.title("🔬 Player Research Lab")
-    player = st.selectbox("Select Player for Research", players)
-
-    pdata = df[df["player_name"] == player].tail(20)
-    img = get_player_image(player)
-    if img:
-        st.image(img, width=200, caption=player)
-
-    stats = ["points", "rebounds", "assists", "steals", "blocks"]
-    for stat in stats:
-        fig = px.bar(pdata, x="GAME_DATE", y=stat, title=f"Last 20 Games - {stat.title()}")
-        st.plotly_chart(fig, use_container_width=True)
-
-st.sidebar.markdown("---")
-st.sidebar.info("🤖 Updated automatically daily at 7AM via GitHub Actions.")
+# -------------------------------------------------
+# RESEARCH TAB
+# -------------------------------------------------
+with tabs[3]:
+    st.header("🔍 Prop Research Lab")
+    player_name = st.selectbox("Select Player to Research", players, index=None, placeholder="Choose a player...")
+    if player_name:
+        img = get_player_image(player_name)
+        st.image(img, width=200)
+        player_data = df[df["player_name"] == player_name].sort_values("GAME_DATE", ascending=False)
+        metrics = {
+            "Last Game": player_data.head(1),
+            "Last 5 Games": player_data.head(5),
+            "Last 10 Games": player_data.head(10),
+            "Last 20 Games": player_data.head(20),
+            "This Season": player_data,
+        }
+        for title, subset in metrics.items():
+            with st.expander(title):
+                avg_stats = subset[["points", "rebounds", "assists"]].mean().to_dict()
+                st.write(avg_stats)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=list(avg_stats.keys()), y=list(avg_stats.values())))
+                fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig, use_container_width=True)
