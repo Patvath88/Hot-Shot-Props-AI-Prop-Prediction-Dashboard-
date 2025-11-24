@@ -21,12 +21,16 @@ MODELS_DIR.mkdir(exist_ok=True)
 # -------------------------------------------------
 @st.cache_data
 def load_data():
-    return pd.read_csv(DATA_PATH)
+    df = pd.read_csv(DATA_PATH)
+    if "player_name" not in df.columns:
+        st.error("❌ 'player_name' column missing from dataset.")
+    return df
 
 @st.cache_resource
 def load_models():
+    stats = ["points", "rebounds", "assists", "minutes", "steals", "blocks", "turnovers"]
     models = {}
-    for stat in ["points", "rebounds", "assists", "minutes", "steals", "blocks", "turnovers"]:
+    for stat in stats:
         try:
             models[stat] = {
                 "rf": joblib.load(MODELS_DIR / f"rf_{stat}.pkl"),
@@ -40,30 +44,37 @@ def load_models():
 @st.cache_data
 def get_player_image(name):
     try:
-        first, last = name.split(" ", 1)
-        url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{first.lower()}_{last.lower()}.png"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return Image.open(BytesIO(response.content))
+        formatted_name = name.lower().replace(" ", "_")
+        url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{formatted_name}.png"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            return Image.open(BytesIO(r.content))
     except:
         pass
-    return Image.open(BytesIO(requests.get("https://cdn.nba.com/logos/nba/nba-logoman-word-white.svg").content))
+    placeholder = "https://cdn.nba.com/logos/nba/nba-logoman-word-white.svg"
+    return Image.open(BytesIO(requests.get(placeholder).content))
 
 @st.cache_data
 def get_team_logo(team_name):
+    team_map = {
+        "LAL": "1610612747", "GSW": "1610612744", "BOS": "1610612738", "MIA": "1610612748",
+        "MIL": "1610612749", "DAL": "1610612742", "PHX": "1610612756", "DEN": "1610612743",
+        "NYK": "1610612752", "PHI": "1610612755"
+    }
     try:
-        base_url = "https://cdn.nba.com/logos/nba"
-        team_map = {
-            "Los Angeles Lakers": "1610612747", "Golden State Warriors": "1610612744",
-            "Boston Celtics": "1610612738", "Dallas Mavericks": "1610612742",
-            "Miami Heat": "1610612748", "Milwaukee Bucks": "1610612749"
-        }
-        team_id = team_map.get(team_name)
-        if team_id:
-            return f"{base_url}/{team_id}/primary/L/logo.svg"
+        team_id = team_map.get(team_name, "1610612747")
+        return f"https://cdn.nba.com/logos/nba/{team_id}/primary/L/logo.svg"
     except:
-        pass
-    return None
+        return None
+
+def safe_predict(model, df_row):
+    model_features = list(model.feature_names_in_)
+    available_features = [f for f in model_features if f in df_row.columns]
+    aligned = df_row[available_features].copy()
+    for f in model_features:
+        if f not in aligned.columns:
+            aligned[f] = 0
+    return model.predict(aligned[model_features])[0]
 
 def predict_player(player_name, df, models):
     player_data = df[df["player_name"] == player_name].tail(1)
@@ -73,14 +84,13 @@ def predict_player(player_name, df, models):
     for stat, model_set in models.items():
         if model_set:
             try:
-                latest = player_data[model_set["rf"].feature_names_in_]
                 avg_pred = np.mean([
-                    model_set["rf"].predict(latest)[0],
-                    model_set["xgb"].predict(latest)[0],
-                    model_set["lgbm"].predict(latest)[0]
+                    safe_predict(model_set["rf"], player_data),
+                    safe_predict(model_set["xgb"], player_data),
+                    safe_predict(model_set["lgbm"], player_data)
                 ])
                 preds[stat] = avg_pred
-            except Exception:
+            except:
                 preds[stat] = None
     preds["PA"] = (preds.get("points", 0) or 0) + (preds.get("assists", 0) or 0)
     preds["PR"] = (preds.get("points", 0) or 0) + (preds.get("rebounds", 0) or 0)
@@ -89,51 +99,47 @@ def predict_player(player_name, df, models):
     return preds
 
 # -------------------------------------------------
-# APP CONTENT
+# APP
 # -------------------------------------------------
 df = load_data()
 models = load_models()
 tabs = st.tabs(["🏠 Home / Favorites", "🧠 Prop Projection Lab", "📊 Projection Tracker", "🔍 Prop Research Lab"])
 
-# -------------------------------------------------
 # HOME TAB
-# -------------------------------------------------
 with tabs[0]:
     st.title("🏀 Hot Shot Props AI Dashboard")
-    st.write("Your saved favorite players refresh daily with new projections.")
+    st.caption("Favorites auto-refresh daily with updated projections.")
     if "favorites" not in st.session_state:
         st.session_state["favorites"] = []
     for fav in st.session_state["favorites"]:
         preds = predict_player(fav, df, models)
         if preds:
-            st.subheader(f"{fav}")
-            cols = st.columns(4)
-            for i, (stat, value) in enumerate(preds.items()):
-                cols[i % 4].metric(label=stat.upper(), value=round(value, 2))
+            st.subheader(fav)
+            cols = st.columns(5)
+            for i, (stat, val) in enumerate(preds.items()):
+                cols[i % 5].metric(stat.upper(), round(val, 2))
 
-# -------------------------------------------------
-# PROP PROJECTION LAB
-# -------------------------------------------------
+# PROJECTION LAB
 with tabs[1]:
     st.header("🧠 Player Projection Lab")
     players = sorted(df["player_name"].unique())
-    player_name = st.selectbox("Select Player", players, index=None, placeholder="Choose a player...")
+    player_name = st.selectbox("Select Player", players)
     if player_name:
         preds = predict_player(player_name, df, models)
         if preds:
             col1, col2 = st.columns([1, 3])
             with col1:
                 img = get_player_image(player_name)
-                st.image(img, width=220)
-            with col2:
-                st.subheader(f"Projected Stats for {player_name}")
-                team_name = df[df["player_name"] == player_name]["team_name"].iloc[-1] if "team_name" in df.columns else "Unknown"
+                st.image(img, width=200)
+                team_name = df[df["player_name"] == player_name]["team_abbreviation"].iloc[-1] if "team_abbreviation" in df.columns else "LAL"
                 team_logo = get_team_logo(team_name)
                 if team_logo:
-                    st.image(team_logo, width=120)
-                cols = st.columns(4)
+                    st.image(team_logo, width=100)
+            with col2:
+                st.subheader(f"Projected Stats for {player_name}")
+                cols = st.columns(5)
                 for i, (stat, val) in enumerate(preds.items()):
-                    cols[i % 4].metric(label=stat.upper(), value=round(val, 2))
+                    cols[i % 5].metric(stat.upper(), round(val, 2))
             c1, c2 = st.columns(2)
             if c1.button("⭐ Add to Favorites"):
                 if player_name not in st.session_state["favorites"]:
@@ -145,9 +151,7 @@ with tabs[1]:
                 st.session_state["tracked"].append({player_name: preds})
                 st.info(f"Tracking {player_name}'s projections!")
 
-# -------------------------------------------------
 # TRACKER TAB
-# -------------------------------------------------
 with tabs[2]:
     st.header("📊 Projection Tracker")
     if "tracked" not in st.session_state:
@@ -156,21 +160,19 @@ with tabs[2]:
         for entry in st.session_state["tracked"]:
             for name, stats in entry.items():
                 st.subheader(name)
-                cols = st.columns(4)
+                cols = st.columns(5)
                 for i, (stat, val) in enumerate(stats.items()):
-                    cols[i % 4].metric(label=stat.upper(), value=round(val, 2))
+                    cols[i % 5].metric(label=stat.upper(), value=round(val, 2))
     else:
         st.info("No tracked projections yet.")
 
-# -------------------------------------------------
 # RESEARCH TAB
-# -------------------------------------------------
 with tabs[3]:
     st.header("🔍 Prop Research Lab")
-    player_name = st.selectbox("Select Player to Research", players, index=None, placeholder="Choose a player...")
+    player_name = st.selectbox("Select Player to Research", players)
     if player_name:
         img = get_player_image(player_name)
-        st.image(img, width=200)
+        st.image(img, width=180)
         player_data = df[df["player_name"] == player_name].sort_values("GAME_DATE", ascending=False)
         metrics = {
             "Most Recent Game": player_data.head(1),
