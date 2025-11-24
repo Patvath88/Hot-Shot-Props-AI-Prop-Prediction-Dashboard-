@@ -1,30 +1,65 @@
 import pandas as pd
-import xgboost as xgb
-import os
+import numpy as np
+from pathlib import Path
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+import joblib
 
-FEATURES = ["points_rolling5", "rebounds_rolling5", "assists_rolling5", "minutes_rolling5", "minutes"]
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
+DATA_PATH = Path("data/model_dataset.csv")
+MODELS_DIR = Path("models")
+MODELS_DIR.mkdir(exist_ok=True)
 
-def train_stat_model(target):
-    df = pd.read_csv("data/model_dataset.csv")
-    X = df[FEATURES]
-    y = df[target]
+# -------------------------------------------------
+# LOAD DATA
+# -------------------------------------------------
+print("📦 Loading dataset...")
+df = pd.read_csv(DATA_PATH)
 
-    model = xgb.XGBRegressor(
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=6,
-        random_state=42,
-        n_jobs=-1
-    )
+target_stats = [
+    "points", "rebounds", "assists", "threept_fg",
+    "steals", "blocks", "minutes",
+    "points_assists", "points_rebounds",
+    "rebounds_assists", "points_rebounds_assists"
+]
 
-    model.fit(X, y)
-    os.makedirs("models", exist_ok=True)
-    model.save_model(f"models/{target}.json")
-    print(f"✅ Saved models/{target}.json")
+feature_cols = [
+    c for c in df.columns if c not in ["game_date", "player_name"]
+]
 
-def main():
-    for stat in ["points", "rebounds", "assists"]:
-        train_stat_model(stat)
+print(f"✅ Found {len(df)} records and {len(feature_cols)} features")
 
-if __name__ == "__main__":
-    main()
+# -------------------------------------------------
+# TRAIN MODELS
+# -------------------------------------------------
+for target in target_stats:
+    if target not in df.columns:
+        print(f"⚠️ Skipping missing stat: {target}")
+        continue
+
+    print(f"\n🎯 Training models for {target}...")
+
+    X = df[feature_cols].fillna(0)
+    y = df[target].fillna(0)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    rf = RandomForestRegressor(n_estimators=150, random_state=42)
+    xgb = XGBRegressor(n_estimators=200, learning_rate=0.08, max_depth=6, subsample=0.8, random_state=42)
+    lgbm = LGBMRegressor(n_estimators=250, learning_rate=0.05, num_leaves=31, random_state=42)
+
+    rf.fit(X_train, y_train)
+    xgb.fit(X_train, y_train)
+    lgbm.fit(X_train, y_train)
+
+    joblib.dump(rf, MODELS_DIR / f"rf_{target}.pkl")
+    joblib.dump(xgb, MODELS_DIR / f"xgb_{target}.pkl")
+    joblib.dump(lgbm, MODELS_DIR / f"lgbm_{target}.pkl")
+
+    print(f"✅ Saved rf_{target}.pkl, xgb_{target}.pkl, lgbm_{target}.pkl")
+
+print("\n🏁 All models trained and saved successfully.")
