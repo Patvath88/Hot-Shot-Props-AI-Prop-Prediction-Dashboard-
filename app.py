@@ -165,6 +165,7 @@ with tabs[2]:
                     cols[i % 5].metric(label=stat.upper(), value=round(val, 2))
     else:
         st.info("No tracked projections yet.")
+
 # RESEARCH TAB
 with tabs[3]:
     st.header("🔍 Prop Research Lab")
@@ -174,7 +175,6 @@ with tabs[3]:
         st.image(img, width=180)
         player_data = df[df["player_name"] == player_name]
 
-        # ✅ Handle flexible date column names
         date_col = None
         for col in ["GAME_DATE", "game_date", "date"]:
             if col in player_data.columns:
@@ -184,7 +184,7 @@ with tabs[3]:
         if date_col:
             player_data = player_data.sort_values(date_col, ascending=False)
         else:
-            st.warning("No date column found in dataset — showing unsorted data.")
+            st.warning("No date column found — showing unsorted data.")
 
         metrics = {
             "Most Recent Game": player_data.head(1),
@@ -195,13 +195,12 @@ with tabs[3]:
         }
 
         for i, (title, subset) in enumerate(metrics.items()):
-        with st.expander(title):
-        cols_to_use = [c for c in ["points", "rebounds", "assists", "steals", "blocks", "minutes"] if c in subset.columns]
-        avg_stats = subset[cols_to_use].mean().to_dict()
-        st.write(avg_stats)
-        if avg_stats:
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=list(avg_stats.keys()), y=list(avg_stats.values())))
-            fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
-            # ✅ Add unique key for each chart to fix duplicate element ID errors
-            st.plotly_chart(fig, use_container_width=True, key=f"chart_{i}_{title.replace(' ', '_')}")
+            with st.expander(title):
+                cols_to_use = [c for c in ["points", "rebounds", "assists", "steals", "blocks", "minutes"] if c in subset.columns]
+                avg_stats = subset[cols_to_use].mean().to_dict()
+                st.write(avg_stats)
+                if avg_stats:
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(x=list(avg_stats.keys()), y=list(avg_stats.values())))
+                    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+                    st.plotly_chart(fig, use_container_width=True, key=f"chart_{i}_{title.replace(' ', '_')}")
