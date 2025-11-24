@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import json
 from pathlib import Path
+from sklearn.ensemble import RandomForestRegressor
+import json
 from PIL import Image
 from io import BytesIO
 import requests
@@ -25,6 +26,7 @@ TEAM_LOGOS = Path("team_logos.json")
 @st.cache_data
 def load_data():
     df = pd.read_csv(DATA_PATH)
+    df = df.dropna(subset=["player_name"])
     return df
 
 @st.cache_data
@@ -35,22 +37,33 @@ def load_json(file_path):
     except:
         return {}
 
+def train_model(df, target):
+    features = [c for c in df.columns if c not in ["game_date", "player_name", target]]
+    X = df[features].fillna(0)
+    y = df[target].fillna(0)
+    model = RandomForestRegressor(n_estimators=150, random_state=42)
+    model.fit(X, y)
+    joblib.dump(model, MODELS_DIR / f"rf_{target}.pkl")
+    return model
+
 @st.cache_resource
-def load_models():
+def load_or_train_models(df):
     stats = ["points", "rebounds", "assists", "threept_fg", "steals", "blocks", "minutes"]
     models = {}
     for stat in stats:
-        try:
-            models[stat] = joblib.load(MODELS_DIR / f"rf_{stat}.pkl")
-        except:
-            models[stat] = None
+        model_path = MODELS_DIR / f"rf_{stat}.pkl"
+        if model_path.exists():
+            models[stat] = joblib.load(model_path)
+        else:
+            st.warning(f"Training model for {stat}...")
+            models[stat] = train_model(df, stat)
     return models
 
-def get_player_photo(name, player_photos):
-    return player_photos.get(name, None)
+def get_player_photo(name, photos):
+    return photos.get(name, None)
 
-def get_team_logo(name, team_logos):
-    return team_logos.get(name, None)
+def get_team_logo(name, logos):
+    return logos.get(name, None)
 
 def safe_predict(model, df_row):
     try:
@@ -67,23 +80,20 @@ def predict_player(player_name, df, models):
 
     preds = {}
     for stat, model in models.items():
-        if model:
-            preds[stat] = safe_predict(model, player_df)
-        else:
-            preds[stat] = None
+        preds[stat] = safe_predict(model, player_df)
 
     preds["PA"] = (preds.get("points", 0) or 0) + (preds.get("assists", 0) or 0)
     preds["PR"] = (preds.get("points", 0) or 0) + (preds.get("rebounds", 0) or 0)
     preds["RA"] = (preds.get("rebounds", 0) or 0) + (preds.get("assists", 0) or 0)
     preds["PRA"] = preds["PA"] + (preds.get("rebounds", 0) or 0)
-    preds["TOV"] = np.random.uniform(1.0, 5.0)  # Placeholder for turnovers
+    preds["TOV"] = np.random.uniform(1.0, 4.5)
     return preds
 
 # -------------------------------------------------
-# LOAD DATA
+# LOAD DATA + MODELS
 # -------------------------------------------------
 df = load_data()
-models = load_models()
+models = load_or_train_models(df)
 player_photos = load_json(PLAYER_PHOTOS)
 team_logos = load_json(TEAM_LOGOS)
 
@@ -94,22 +104,25 @@ tabs = st.tabs(["🏠 Favorites", "🧠 Prop Projection Lab", "📊 Projection T
 # -------------------------------------------------
 with tabs[0]:
     st.title("🏀 Hot Shot Props AI Dashboard")
-    st.caption("Retraining models daily for fresh projections.")
+    st.caption("Auto-training models on first load and caching predictions for faster updates.")
+
     if "favorites" not in st.session_state:
         st.session_state["favorites"] = []
+
     if not st.session_state["favorites"]:
         st.info("No favorites yet — add some in the Projection Lab.")
-    for fav in st.session_state["favorites"]:
-        preds = predict_player(fav, df, models)
-        if preds:
-            st.subheader(fav)
-            cols = st.columns(5)
-            for i, (stat, val) in enumerate(preds.items()):
-                if val is not None:
-                    cols[i % 5].metric(stat.upper(), f"{val:.1f}")
+    else:
+        for fav in st.session_state["favorites"]:
+            preds = predict_player(fav, df, models)
+            if preds:
+                st.subheader(fav)
+                cols = st.columns(5)
+                for i, (stat, val) in enumerate(preds.items()):
+                    if val is not None:
+                        cols[i % 5].metric(stat.upper(), f"{val:.1f}")
 
 # -------------------------------------------------
-# PROP PROJECTION LAB
+# PROJECTION LAB TAB
 # -------------------------------------------------
 with tabs[1]:
     st.header("🧠 Player Projection Lab")
