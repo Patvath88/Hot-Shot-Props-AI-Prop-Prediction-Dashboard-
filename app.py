@@ -195,7 +195,7 @@ with tabs[3]:
         }
 
         for i, (title, subset) in enumerate(metrics.items()):
-    with st.expander(title):
+        with st.expander(title):
         cols_to_use = [c for c in ["points", "rebounds", "assists", "steals", "blocks", "minutes"] if c in subset.columns]
         avg_stats = subset[cols_to_use].mean().to_dict()
         st.write(avg_stats)
