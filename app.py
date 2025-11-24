@@ -50,12 +50,17 @@ def get_player_image(name):
     return Image.open(BytesIO(requests.get("https://cdn.nba.com/logos/nba/nba-logoman-word-white.svg").content))
 
 @st.cache_data
-def get_team_logo(team_abbrev):
+def get_team_logo(team_name):
     try:
-        url = f"https://cdn.nba.com/logos/nba/{team_abbrev}/primary/L/logo.svg"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return url
+        base_url = "https://cdn.nba.com/logos/nba"
+        team_map = {
+            "Los Angeles Lakers": "1610612747", "Golden State Warriors": "1610612744",
+            "Boston Celtics": "1610612738", "Dallas Mavericks": "1610612742",
+            "Miami Heat": "1610612748", "Milwaukee Bucks": "1610612749"
+        }
+        team_id = team_map.get(team_name)
+        if team_id:
+            return f"{base_url}/{team_id}/primary/L/logo.svg"
     except:
         pass
     return None
@@ -75,9 +80,8 @@ def predict_player(player_name, df, models):
                     model_set["lgbm"].predict(latest)[0]
                 ])
                 preds[stat] = avg_pred
-            except Exception as e:
+            except Exception:
                 preds[stat] = None
-    # Combo projections
     preds["PA"] = (preds.get("points", 0) or 0) + (preds.get("assists", 0) or 0)
     preds["PR"] = (preds.get("points", 0) or 0) + (preds.get("rebounds", 0) or 0)
     preds["RA"] = (preds.get("rebounds", 0) or 0) + (preds.get("assists", 0) or 0)
@@ -96,7 +100,7 @@ tabs = st.tabs(["🏠 Home / Favorites", "🧠 Prop Projection Lab", "📊 Proje
 # -------------------------------------------------
 with tabs[0]:
     st.title("🏀 Hot Shot Props AI Dashboard")
-    st.write("Your saved favorite players and their latest projections refresh automatically every morning.")
+    st.write("Your saved favorite players refresh daily with new projections.")
     if "favorites" not in st.session_state:
         st.session_state["favorites"] = []
     for fav in st.session_state["favorites"]:
@@ -117,16 +121,29 @@ with tabs[1]:
     if player_name:
         preds = predict_player(player_name, df, models)
         if preds:
-            img = get_player_image(player_name)
-            st.image(img, width=200)
-            st.subheader(f"Projected Stats for {player_name}")
-            cols = st.columns(4)
-            for i, (stat, val) in enumerate(preds.items()):
-                cols[i % 4].metric(label=stat.upper(), value=round(val, 2))
-            if st.button("⭐ Add to Favorites"):
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                img = get_player_image(player_name)
+                st.image(img, width=220)
+            with col2:
+                st.subheader(f"Projected Stats for {player_name}")
+                team_name = df[df["player_name"] == player_name]["team_name"].iloc[-1] if "team_name" in df.columns else "Unknown"
+                team_logo = get_team_logo(team_name)
+                if team_logo:
+                    st.image(team_logo, width=120)
+                cols = st.columns(4)
+                for i, (stat, val) in enumerate(preds.items()):
+                    cols[i % 4].metric(label=stat.upper(), value=round(val, 2))
+            c1, c2 = st.columns(2)
+            if c1.button("⭐ Add to Favorites"):
                 if player_name not in st.session_state["favorites"]:
                     st.session_state["favorites"].append(player_name)
                     st.success(f"Added {player_name} to favorites!")
+            if c2.button("📊 Track Projection"):
+                if "tracked" not in st.session_state:
+                    st.session_state["tracked"] = []
+                st.session_state["tracked"].append({player_name: preds})
+                st.info(f"Tracking {player_name}'s projections!")
 
 # -------------------------------------------------
 # TRACKER TAB
@@ -135,12 +152,15 @@ with tabs[2]:
     st.header("📊 Projection Tracker")
     if "tracked" not in st.session_state:
         st.session_state["tracked"] = []
-    st.write("Track your saved projections and compare to actual results.")
     if st.session_state["tracked"]:
-        for t in st.session_state["tracked"]:
-            st.write(t)
+        for entry in st.session_state["tracked"]:
+            for name, stats in entry.items():
+                st.subheader(name)
+                cols = st.columns(4)
+                for i, (stat, val) in enumerate(stats.items()):
+                    cols[i % 4].metric(label=stat.upper(), value=round(val, 2))
     else:
-        st.info("No projections tracked yet.")
+        st.info("No tracked projections yet.")
 
 # -------------------------------------------------
 # RESEARCH TAB
@@ -153,15 +173,15 @@ with tabs[3]:
         st.image(img, width=200)
         player_data = df[df["player_name"] == player_name].sort_values("GAME_DATE", ascending=False)
         metrics = {
-            "Last Game": player_data.head(1),
+            "Most Recent Game": player_data.head(1),
             "Last 5 Games": player_data.head(5),
             "Last 10 Games": player_data.head(10),
             "Last 20 Games": player_data.head(20),
-            "This Season": player_data,
+            "Season Averages": player_data,
         }
         for title, subset in metrics.items():
             with st.expander(title):
-                avg_stats = subset[["points", "rebounds", "assists"]].mean().to_dict()
+                avg_stats = subset[["points", "rebounds", "assists", "steals", "blocks", "minutes"]].mean().to_dict()
                 st.write(avg_stats)
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=list(avg_stats.keys()), y=list(avg_stats.values())))
