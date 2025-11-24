@@ -194,13 +194,14 @@ with tabs[3]:
             "Season Averages": player_data,
         }
 
-        for title, subset in metrics.items():
-            with st.expander(title):
-                cols_to_use = [c for c in ["points", "rebounds", "assists", "steals", "blocks", "minutes"] if c in subset.columns]
-                avg_stats = subset[cols_to_use].mean().to_dict()
-                st.write(avg_stats)
-                if avg_stats:
-                    fig = go.Figure()
-                    fig.add_trace(go.Bar(x=list(avg_stats.keys()), y=list(avg_stats.values())))
-                    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
-                    st.plotly_chart(fig, use_container_width=True)
+        for i, (title, subset) in enumerate(metrics.items()):
+    with st.expander(title):
+        cols_to_use = [c for c in ["points", "rebounds", "assists", "steals", "blocks", "minutes"] if c in subset.columns]
+        avg_stats = subset[cols_to_use].mean().to_dict()
+        st.write(avg_stats)
+        if avg_stats:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=list(avg_stats.keys()), y=list(avg_stats.values())))
+            fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0))
+            # ✅ Add unique key for each chart to fix duplicate element ID errors
+            st.plotly_chart(fig, use_container_width=True, key=f"chart_{i}_{title.replace(' ', '_')}")
