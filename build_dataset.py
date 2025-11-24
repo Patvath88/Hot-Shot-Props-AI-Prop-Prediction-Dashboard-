@@ -1,26 +1,52 @@
 import pandas as pd
-import os
+from pathlib import Path
 
+# -------------------------------------------------
+# CONFIG
+# -------------------------------------------------
+DATA_DIR = Path("data")
+RAW_LOGS_FILE = DATA_DIR / "raw_logs.csv"
+MODEL_DATASET_FILE = DATA_DIR / "model_dataset.csv"
 
+# -------------------------------------------------
+# BUILD FUNCTION
+# -------------------------------------------------
 def build_dataset():
-    raw_path = "data/raw_logs.csv"
-    if not os.path.exists(raw_path):
-        raise Exception("Raw logs missing. Run fetch_logs.py first.")
+    print("📊 Building enriched dataset...")
 
-    df = pd.read_csv(raw_path)
+    if not RAW_LOGS_FILE.exists():
+        raise FileNotFoundError(f"❌ Missing {RAW_LOGS_FILE}. Run fetch_logs.py first.")
+
+    df = pd.read_csv(RAW_LOGS_FILE)
+    print(f"📥 Loaded {len(df)} rows from raw logs")
+
+    # Ensure required columns exist
+    required = ["player_name", "GAME_DATE", "points", "rebounds", "assists", "steals", "blocks", "minutes"]
+    for col in required:
+        if col not in df.columns:
+            raise KeyError(f"Missing required column: {col}")
+
+    # Sort and compute rolling averages
     df = df.sort_values(["player_name", "GAME_DATE"])
-
-    for col in ["points", "rebounds", "assists", "minutes"]:
-        df[f"{col}_rolling5"] = (
-            df.groupby("player_name")[col].rolling(5).mean().reset_index(drop=True)
+    for stat in ["points", "rebounds", "assists", "minutes"]:
+        df[f"{stat}_rolling5"] = (
+            df.groupby("player_name")[stat]
+            .transform(lambda x: x.rolling(window=5, min_periods=1).mean())
         )
 
-    df = df.dropna()
-    os.makedirs("data", exist_ok=True)
-    df.to_csv("data/model_dataset.csv", index=False)
-    print("✅ Saved data/model_dataset.csv")
-    return df
+    # Combo stats
+    df["points_assists"] = df["points"] + df["assists"]
+    df["points_rebounds"] = df["points"] + df["rebounds"]
+    df["rebounds_assists"] = df["rebounds"] + df["assists"]
+    df["points_rebounds_assists"] = df["points"] + df["rebounds"] + df["assists"]
 
+    # Clean & save
+    df = df.dropna(subset=["player_name"])
+    df.to_csv(MODEL_DATASET_FILE, index=False)
+    print(f"✅ Saved cleaned dataset to {MODEL_DATASET_FILE}")
 
+# -------------------------------------------------
+# MAIN
+# -------------------------------------------------
 if __name__ == "__main__":
     build_dataset()
